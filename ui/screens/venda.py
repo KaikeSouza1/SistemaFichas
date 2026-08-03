@@ -202,34 +202,84 @@ def tela(page: ft.Page, estado, ao_fechar_caixa, ao_deslogar, ao_abrir_configura
     # ---------- Troca ----------
 
     def abrir_dialogo_troca(e):
-        opcoes_produto = [ft.dropdown.Option(str(p["id"]), p["nome"]) for p in produtos]
+        produtos_por_id = {p["id"]: p for p in produtos}
+        opcoes_produto = [ft.dropdown.Option(str(p["id"]), f"{p['nome']} — {_fmt(p['preco'])}") for p in produtos]
 
-        dropdown_saida = ft.Dropdown(label="Produto que o cliente devolveu", width=300, options=opcoes_produto,
+        dropdown_saida = ft.Dropdown(label="Produto que o cliente devolveu", width=320, options=opcoes_produto,
                                       border_color=theme.BORDA, focused_border_color=theme.BRASA, bgcolor=theme.SURFACE_ALTA)
-        campo_qtd_saida = theme.campo_texto("Quantidade devolvida", value="1", width=140)
-        dropdown_entrada = ft.Dropdown(label="Produto novo (opcional)", width=300,
+        campo_qtd_saida = theme.campo_texto("Quantidade devolvida", value="1", width=150)
+        texto_subtotal_saida = ft.Text("", color=theme.TEXTO_SUAVE, size=12)
+
+        dropdown_entrada = ft.Dropdown(label="Produto novo (opcional)", width=320,
                                         options=[ft.dropdown.Option("nenhum", "Nenhum - só devolver dinheiro")] + opcoes_produto,
                                         value="nenhum",
                                         border_color=theme.BORDA, focused_border_color=theme.BRASA, bgcolor=theme.SURFACE_ALTA)
-        campo_qtd_entrada = theme.campo_texto("Quantidade nova", value="1", width=140)
-        campo_motivo = theme.campo_texto("Motivo (opcional)", width=300)
+        campo_qtd_entrada = theme.campo_texto("Quantidade nova", value="1", width=150)
+        texto_subtotal_entrada = ft.Text("", color=theme.TEXTO_SUAVE, size=12)
+
+        campo_motivo = theme.campo_texto("Motivo (opcional)", width=320)
+
+        texto_resultado = ft.Text("", size=17, weight=ft.FontWeight.W_800)
+
+        def ler_qtd(campo):
+            try:
+                valor = int(campo.value)
+                return valor if valor > 0 else 1
+            except (ValueError, TypeError):
+                return 1
+
+        def recalcular(e=None):
+            if dropdown_saida.value:
+                produto_saida = produtos_por_id[int(dropdown_saida.value)]
+                qtd_saida = ler_qtd(campo_qtd_saida)
+                subtotal_saida = produto_saida["preco"] * qtd_saida
+                texto_subtotal_saida.value = f"{_fmt(produto_saida['preco'])} cada · {qtd_saida}x = {_fmt(subtotal_saida)}"
+            else:
+                subtotal_saida = None
+                texto_subtotal_saida.value = ""
+
+            if dropdown_entrada.value and dropdown_entrada.value != "nenhum":
+                produto_entrada = produtos_por_id[int(dropdown_entrada.value)]
+                qtd_entrada = ler_qtd(campo_qtd_entrada)
+                subtotal_entrada = produto_entrada["preco"] * qtd_entrada
+                texto_subtotal_entrada.value = f"{_fmt(produto_entrada['preco'])} cada · {qtd_entrada}x = {_fmt(subtotal_entrada)}"
+                campo_qtd_entrada.disabled = False
+            else:
+                subtotal_entrada = 0
+                texto_subtotal_entrada.value = ""
+                campo_qtd_entrada.disabled = True
+
+            if subtotal_saida is None:
+                texto_resultado.value = ""
+            else:
+                diferenca = subtotal_entrada - subtotal_saida
+                if diferenca < 0:
+                    texto_resultado.value = f"Troco pro cliente: {_fmt(-diferenca)}"
+                    texto_resultado.color = theme.SUCESSO
+                elif diferenca > 0:
+                    texto_resultado.value = f"Cliente paga a diferença: {_fmt(diferenca)}"
+                    texto_resultado.color = theme.ALERTA
+                else:
+                    texto_resultado.value = "Sem diferença de valor"
+                    texto_resultado.color = theme.TEXTO_SUAVE
+
+            dlg.update()
+
+        dropdown_saida.on_change = recalcular
+        campo_qtd_saida.on_change = recalcular
+        dropdown_entrada.on_change = recalcular
+        campo_qtd_entrada.on_change = recalcular
 
         def confirmar(e):
             if not dropdown_saida.value:
                 return
-            produto_saida = next(p for p in produtos if p["id"] == int(dropdown_saida.value))
-            try:
-                qtd_saida = int(campo_qtd_saida.value)
-            except ValueError:
-                return
+            produto_saida = produtos_por_id[int(dropdown_saida.value)]
+            qtd_saida = ler_qtd(campo_qtd_saida)
             produto_entrada = None
             qtd_entrada = 0
             if dropdown_entrada.value and dropdown_entrada.value != "nenhum":
-                produto_entrada = next(p for p in produtos if p["id"] == int(dropdown_entrada.value))
-                try:
-                    qtd_entrada = int(campo_qtd_entrada.value)
-                except ValueError:
-                    return
+                produto_entrada = produtos_por_id[int(dropdown_entrada.value)]
+                qtd_entrada = ler_qtd(campo_qtd_entrada)
             try:
                 repository.registrar_troca(
                     estado.sessao_id, estado.caixa_id, estado.operador_id,
@@ -245,15 +295,22 @@ def tela(page: ft.Page, estado, ao_fechar_caixa, ao_deslogar, ao_abrir_configura
             modal=True, bgcolor=theme.SURFACE,
             title=ft.Text("Troca", color=theme.TEXTO),
             content=ft.Column(
-                [dropdown_saida, campo_qtd_saida, ft.Divider(color=theme.BORDA),
-                 dropdown_entrada, campo_qtd_entrada, campo_motivo],
-                tight=True, spacing=12, scroll=ft.ScrollMode.AUTO, width=320,
+                [
+                    dropdown_saida, campo_qtd_saida, texto_subtotal_saida,
+                    ft.Divider(color=theme.BORDA),
+                    dropdown_entrada, campo_qtd_entrada, texto_subtotal_entrada,
+                    ft.Divider(color=theme.BORDA),
+                    texto_resultado,
+                    campo_motivo,
+                ],
+                tight=True, spacing=10, scroll=ft.ScrollMode.AUTO, width=340,
             ),
             actions=[
                 ft.TextButton("Cancelar", on_click=lambda e: componentes.fechar_dialogo(page, dlg)),
                 theme.botao_primario("Confirmar", on_click=confirmar),
             ],
         )
+        campo_qtd_entrada.disabled = True
         page.dialog = dlg
         dlg.open = True
         page.update()
