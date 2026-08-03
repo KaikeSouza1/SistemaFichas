@@ -353,7 +353,7 @@ def tela(page: ft.Page, estado, ao_fechar_caixa, ao_deslogar, ao_abrir_configura
         content=ft.Row(
             [
                 ft.Row(
-                    [ft.Icon(ft.icons.LOCAL_FIRE_DEPARTMENT, color=theme.BRASA, size=22),
+                    [ft.Image(src="logo_adk.png", height=28, fit=ft.ImageFit.CONTAIN),
                      ft.Text(evento["nome"], color=theme.TEXTO, size=16, weight=ft.FontWeight.W_700)],
                     spacing=8,
                 ),

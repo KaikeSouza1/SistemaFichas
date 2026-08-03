@@ -13,9 +13,41 @@ from decimal import Decimal
 from escpos.printer import Dummy
 from PIL import Image, ImageDraw, ImageFont
 
+from config.settings import pasta_assets
+
 LARGURA_COLUNAS = 42  # ajustar em Configurações se a impressora usar outra fonte/largura
 LARGURA_PONTOS = 384  # largura da imagem do nome do produto, em pontos (px).
                       # 384 e seguro pra 58mm; se a Elgin usar 80mm, subir p/ 576.
+
+_logo_cache: dict[int, Image.Image] = {}
+
+
+def _imagem_logo(largura_px: int) -> Image.Image | None:
+    """Logo ADK em preto (a impressora nao tem cor), redimensionada pra largura
+    pedida. Cacheada por tamanho apos a primeira leitura - a mesma imagem se
+    repete em toda ficha e fechamento. Retorna None se o arquivo nao existir
+    (impressao segue sem logo em vez de falhar)."""
+    if largura_px in _logo_cache:
+        return _logo_cache[largura_px]
+
+    caminho = pasta_assets() / "logo_adk_preto.png"
+    if not caminho.exists():
+        return None
+
+    logo = Image.open(caminho)
+    alpha = logo.split()[-1]
+    cinza = Image.eval(alpha, lambda a: 255 - a)  # alpha 255 (preto opaco) -> cinza 0 (preto)
+
+    altura_proporcional = int(cinza.height * (largura_px / cinza.width))
+    cinza = cinza.resize((largura_px, altura_proporcional), Image.LANCZOS)
+
+    # Modo coluna (ESC*) imprime em bandas de 24px - arredondar evita corte no meio.
+    altura_final = ((altura_proporcional + 23) // 24) * 24
+    canvas = Image.new("L", (largura_px, altura_final), color=255)
+    canvas.paste(cinza, (0, (altura_final - altura_proporcional) // 2))
+
+    _logo_cache[largura_px] = canvas
+    return canvas
 
 # Fonte usada só pra desenhar o nome do produto como imagem (a impressora não
 # tem essa fonte "embutida"). GS v 0 (bitImageRaster, o padrão do
@@ -92,6 +124,11 @@ def _linha(p, texto: str = "") -> None:
 
 
 def _ficha_de_um_item(p, nome_evento, numero_pedido, data_hora, nome_item, preco, operador_nome, caixa_nome):
+    logo_pequeno = _imagem_logo(160)
+    if logo_pequeno:
+        p.set(align="center")
+        p.image(logo_pequeno, impl="bitImageColumn")
+
     # Cabecalho compacto, alinhado a esquerda (como no modelo de referencia:
     # data e numero do pedido na mesma linha, sem espacos em branco extras).
     p.set(align="left", bold=True)
@@ -149,6 +186,11 @@ def fechamento_caixa_bytes(
 ) -> bytes:
     p = Dummy()
     p.hw("INIT")
+
+    logo = _imagem_logo(280)
+    if logo:
+        p.set(align="center")
+        p.image(logo, impl="bitImageColumn")
 
     p.set(align="center", bold=True)
     _linha(p, "FECHAMENTO DE CAIXA")

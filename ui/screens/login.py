@@ -120,7 +120,7 @@ def tela(page: ft.Page, estado, ao_autenticar, ao_tentar_de_novo, ao_abrir_confi
                     alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
                 ),
                 ft.Container(expand=True),
-                ft.Icon(ft.icons.LOCAL_FIRE_DEPARTMENT, color=theme.BRASA, size=48),
+                ft.Image(src="logo_adk.png", width=220, fit=ft.ImageFit.CONTAIN),
                 theme.titulo("Quem está operando?", tamanho=26),
                 ft.Container(height=8),
                 botoes_operador,

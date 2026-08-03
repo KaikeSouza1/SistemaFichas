@@ -19,6 +19,16 @@ CONFIG_PATH = CONFIG_DIR / "config.json"
 _PASTA_EXECUTAVEL = Path(sys.executable).parent if getattr(sys, "frozen", False) else Path(__file__).resolve().parent.parent
 CAMINHO_BOOTSTRAP = _PASTA_EXECUTAVEL / "config.default.json"
 
+
+def pasta_assets() -> Path:
+    """Onde ficam logo/icone: direto do lado do executavel em dev, ou dentro de
+    _internal/ quando empacotado com PyInstaller (onde --add-data guarda os
+    dados embutidos nas versoes mais recentes)."""
+    for candidato in (_PASTA_EXECUTAVEL / "assets", _PASTA_EXECUTAVEL / "_internal" / "assets"):
+        if candidato.exists():
+            return candidato
+    return _PASTA_EXECUTAVEL / "assets"
+
 DEFAULTS = {
     "postgres": {
         "host": "",
