@@ -2,7 +2,7 @@ import flet as ft
 
 from config import settings
 from db import repository
-from db.connection import ConexaoIndisponivel, testar_conexao
+from db.connection import ConexaoIndisponivel
 from printing import escpos_printer
 from ui import componentes, theme
 
@@ -44,23 +44,8 @@ def tela(page: ft.Page, ao_salvar_conexao, ao_voltar=None) -> ft.Control:
 
 def _tab_conexao(page, ao_salvar_conexao):
     cfg = settings.load()
-    pg = cfg["postgres"]
 
-    campo_host = theme.campo_texto("Host do servidor (IP na rede local)", value=pg["host"], width=320)
-    campo_port = theme.campo_texto("Porta", value=str(pg["port"]), width=150)
-    campo_db = theme.campo_texto("Banco de dados", value=pg["dbname"], width=320)
-    campo_user = theme.campo_texto("Usuário", value=pg["user"], width=320)
-    campo_senha = theme.campo_texto("Senha", value=pg["password"], password=True, can_reveal_password=True, width=320)
     campo_caixa = theme.campo_texto("Nome deste caixa/terminal (ex: Caixa 01)", value=cfg["caixa_nome"], width=320)
-    dropdown_ssl = ft.Dropdown(
-        label="Segurança da conexão (SSL)", width=320, value=pg.get("sslmode", "prefer"),
-        options=[
-            ft.dropdown.Option("disable", "Desabilitado (rede local sem internet)"),
-            ft.dropdown.Option("prefer", "Preferir SSL (padrão)"),
-            ft.dropdown.Option("require", "Exigir SSL (Postgres na nuvem)"),
-        ],
-        border_color=theme.BORDA, focused_border_color=theme.BRASA, bgcolor=theme.SURFACE_ALTA,
-    )
 
     try:
         impressoras = escpos_printer.listar_impressoras_windows()
@@ -74,21 +59,9 @@ def _tab_conexao(page, ao_salvar_conexao):
         border_color=theme.BORDA, focused_border_color=theme.BRASA, bgcolor=theme.SURFACE_ALTA,
     )
 
-    def montar_pg():
-        return {
-            "host": campo_host.value.strip(), "port": int(campo_port.value or 5432),
-            "dbname": campo_db.value.strip(), "user": campo_user.value.strip(), "password": campo_senha.value,
-            "sslmode": dropdown_ssl.value,
-        }
-
-    def testar(e):
-        ok, msg = testar_conexao(montar_pg())
-        componentes.aviso(page, msg if ok else f"Falhou: {msg}", cor=theme.SUCESSO if ok else theme.ERRO)
-
     def salvar(e):
         novo_cfg = {
             **cfg,
-            "postgres": montar_pg(),
             "impressora_windows": dropdown_impressora.value or "",
             "caixa_nome": campo_caixa.value.strip(),
         }
@@ -97,9 +70,8 @@ def _tab_conexao(page, ao_salvar_conexao):
         ao_salvar_conexao()
 
     _ROTULO_PAPEL = {
-        "servidor": "Principal do evento (Postgres local embutido ligado neste PC)",
+        "servidor": "Principal do evento (banco local ligado neste PC)",
         "cliente": "Conectado no PC principal de um evento",
-        "manual": "Avançado (conexão digitada manualmente abaixo)",
     }
 
     def trocar_papel_rede(e):
@@ -110,7 +82,7 @@ def _tab_conexao(page, ao_salvar_conexao):
 
         componentes.dialogo_confirmacao(
             page, "Trocar modo de rede",
-            "Isso volta pra tela de escolha (principal do evento / conectar em outro PC / avançado). Continuar?",
+            "Isso volta pra tela de escolha: este PC vai ser o principal do evento, ou vai conectar em outro? Continuar?",
             ao_confirmar=confirmar, texto_confirmar="Trocar",
         )
 
@@ -130,11 +102,10 @@ def _tab_conexao(page, ao_salvar_conexao):
                         alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
                     ),
                 ),
-                theme.subtitulo("Dados do Postgres central (o PC \"servidor\" da festa) e da impressora deste computador."),
-                campo_host, ft.Row([campo_port, campo_db]), campo_user, campo_senha, dropdown_ssl, campo_caixa,
+                theme.subtitulo("Nome deste caixa e impressora usada nele."),
+                campo_caixa,
                 dropdown_impressora,
-                ft.Row([theme.botao_secundario("Testar conexão", icone=ft.icons.WIFI, on_click=testar),
-                        theme.botao_primario("Salvar", icone=ft.icons.SAVE, on_click=salvar)], spacing=10),
+                theme.botao_primario("Salvar", icone=ft.icons.SAVE, on_click=salvar),
             ],
             spacing=16, scroll=ft.ScrollMode.AUTO,
         ),

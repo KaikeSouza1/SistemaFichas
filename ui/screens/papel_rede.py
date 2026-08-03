@@ -9,7 +9,7 @@ from db import postgres_local
 from ui import componentes, theme
 
 
-def tela(page: ft.Page, ao_escolher, ao_avancado=None) -> ft.Control:
+def tela(page: ft.Page, ao_escolher) -> ft.Control:
     texto_status = ft.Text("", color=theme.TEXTO_SUAVE, size=13)
 
     def escolher_servidor(e):
@@ -111,9 +111,7 @@ def tela(page: ft.Page, ao_escolher, ao_avancado=None) -> ft.Control:
                     spacing=16,
                 ),
                 texto_status,
-            ]
-            + ([ft.TextButton("Configuração avançada (conectar manualmente num servidor específico)",
-                               on_click=lambda e: ao_avancado())] if ao_avancado else []),
+            ],
             spacing=14, horizontal_alignment=ft.CrossAxisAlignment.CENTER,
         ),
         alignment=ft.alignment.center, expand=True, bgcolor=theme.BG, padding=40,

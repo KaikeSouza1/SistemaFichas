@@ -28,7 +28,7 @@ def main(page: ft.Page):
     def verificar_inicio():
         cfg = settings.load()
         if not cfg.get("papel_rede"):
-            mostrar(lambda: papel_rede.tela(page, ao_escolher=verificar_inicio, ao_avancado=_ir_para_avancado))
+            mostrar(lambda: papel_rede.tela(page, ao_escolher=verificar_inicio))
             return
         if not settings.is_configured(cfg):
             ir_para_configuracao()
@@ -58,12 +58,6 @@ def main(page: ft.Page):
 
     def ir_para_configuracao():
         mostrar(lambda: configuracao.tela(page, ao_salvar_conexao=verificar_inicio, ao_voltar=None))
-
-    def _ir_para_avancado():
-        cfg = settings.load()
-        cfg["papel_rede"] = "manual"
-        settings.save(cfg)
-        ir_para_configuracao()
 
     def ir_para_login():
         mostrar(lambda: login.tela(

@@ -42,20 +42,16 @@ DEFAULTS = {
 def load() -> dict:
     # Preferir o config salvo pelo usuario em %APPDATA% quando existir (mesmo
     # em executavel empacotado). Se nao existir, usar o config.default.json
-    # embarcado como ponto de partida. Caso nenhum exista, retornar os DEFAULTS.
+    # embarcado como ponto de partida (normalmente so nome do caixa/impressora
+    # pre-preenchidos). Caso nenhum exista, retornar os DEFAULTS. A conexao com
+    # o Postgres NUNCA vem daqui - e sempre resolvida pela escolha de papel de
+    # rede (ver ui/screens/papel_rede.py e db/postgres_local.py).
     if CONFIG_PATH.exists():
         with open(CONFIG_PATH, "r", encoding="utf-8") as f:
             data = json.load(f)
         merged = json.loads(json.dumps(DEFAULTS))
         merged.update(data)
         merged["postgres"] = {**DEFAULTS["postgres"], **data.get("postgres", {})}
-        # Migracao unica de configs salvas ANTES da tela de escolha de papel de
-        # rede existir: se ja tinha host preenchido manualmente, respeita isso
-        # e nao interrompe o fluxo perguntando de novo. So roda uma vez (depois
-        # "papel_rede" passa a existir de verdade no arquivo, ainda que None).
-        if "papel_rede" not in data and merged["postgres"].get("host"):
-            merged["papel_rede"] = "manual"
-            save(merged)
         return merged
 
     if CAMINHO_BOOTSTRAP.exists():
@@ -64,8 +60,6 @@ def load() -> dict:
         merged = json.loads(json.dumps(DEFAULTS))
         merged.update(data)
         merged["postgres"] = {**DEFAULTS["postgres"], **data.get("postgres", {})}
-        if "papel_rede" not in data and merged["postgres"].get("host"):
-            merged["papel_rede"] = "manual"
         return merged
 
     return json.loads(json.dumps(DEFAULTS))
