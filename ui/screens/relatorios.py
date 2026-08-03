@@ -13,7 +13,7 @@ def tela(page: ft.Page, ao_voltar) -> ft.Control:
 
     corpo = ft.Column(spacing=16, expand=True, scroll=ft.ScrollMode.AUTO)
 
-    def carregar(evento_id):
+    def carregar(evento_id, atualizar_pagina=True):
         try:
             mais_vendidos = repository.produtos_mais_vendidos(evento_id)
             por_operador = repository.vendas_por_operador(evento_id)
@@ -21,7 +21,8 @@ def tela(page: ft.Page, ao_voltar) -> ft.Control:
             excluidos = repository.itens_excluidos_por_evento(evento_id)
         except ConexaoIndisponivel:
             corpo.controls = [componentes.tela_estado_erro("Não deu para carregar os relatórios.", lambda: carregar(evento_id))]
-            corpo.update()
+            if atualizar_pagina:
+                corpo.update()
             return
 
         corpo.controls = [
@@ -38,7 +39,8 @@ def tela(page: ft.Page, ao_voltar) -> ft.Control:
                 spacing=16, expand=True, vertical_alignment=ft.CrossAxisAlignment.START,
             ),
         ]
-        corpo.update()
+        if atualizar_pagina:
+            corpo.update()
 
     def mudar_evento(e):
         valor = dropdown_evento.value
@@ -55,7 +57,7 @@ def tela(page: ft.Page, ao_voltar) -> ft.Control:
         on_change=mudar_evento,
     )
 
-    carregar(None if valor_inicial == "todos" else int(valor_inicial))
+    carregar(None if valor_inicial == "todos" else int(valor_inicial), atualizar_pagina=False)
 
     return ft.Container(
         content=ft.Column(
