@@ -190,6 +190,27 @@ $$ LANGUAGE plpgsql;
 -- Operador padrao para o primeiro acesso (PIN deve ser trocado em Configuracoes).
 INSERT INTO operadores (nome, pin) VALUES ('Administrador', '0000') ON CONFLICT DO NOTHING;
 
+-- Catalogo padrao (churrasco tipico) - todo evento novo ja nasce com isso.
+-- Pode ser editado, desativado ou ter novos itens cadastrados em
+-- Configuracoes > Produtos, sem afetar outros eventos.
+INSERT INTO categorias_produto (nome, ordem) VALUES
+    ('Bebidas', 1),
+    ('Comidas', 2)
+ON CONFLICT (nome) DO NOTHING;
+
+INSERT INTO produtos (nome, preco, categoria_id, cor_hex, ordem) VALUES
+    ('Cerveja', 8.00, (SELECT id FROM categorias_produto WHERE nome = 'Bebidas'), '#D9A82E', 1),
+    ('Refrigerante', 7.00, (SELECT id FROM categorias_produto WHERE nome = 'Bebidas'), '#D1483B', 2),
+    ('Água', 5.00, (SELECT id FROM categorias_produto WHERE nome = 'Bebidas'), '#3E7CB1', 3),
+    ('Água de Coco', 7.00, (SELECT id FROM categorias_produto WHERE nome = 'Bebidas'), '#4F9D63', 4),
+    ('Suco', 7.00, (SELECT id FROM categorias_produto WHERE nome = 'Bebidas'), '#8B5FBF', 5),
+    ('Espetinho', 12.00, (SELECT id FROM categorias_produto WHERE nome = 'Comidas'), '#8A5A3C', 6),
+    ('Galeto', 25.00, (SELECT id FROM categorias_produto WHERE nome = 'Comidas'), '#E2662D', 7),
+    ('Costela', 30.00, (SELECT id FROM categorias_produto WHERE nome = 'Comidas'), '#8A5A3C', 8),
+    ('Linguiça', 15.00, (SELECT id FROM categorias_produto WHERE nome = 'Comidas'), '#D1483B', 9),
+    ('Pão de Alho', 8.00, (SELECT id FROM categorias_produto WHERE nome = 'Comidas'), '#D9A82E', 10),
+    ('Porção de Fritas', 15.00, (SELECT id FROM categorias_produto WHERE nome = 'Comidas'), '#6B6259', 11);
+
 -- Marca quais eventos (deste banco LOCAL) ja foram enviados com sucesso pro
 -- servidor central (ver db/sync.py). Um evento so entra aqui depois de FECHADO
 -- e confirmado no central - antes disso o processo de sync fica tentando de novo.
