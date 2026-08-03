@@ -195,3 +195,36 @@ def fechamento_caixa_bytes(
     _linha(p)
     p.cut()
     return p.output
+
+
+def relatorio_ranking_bytes(titulo: str, linhas: list[dict], campo_nome: str, campo_qtd: str, campo_total: str) -> bytes:
+    """Imprime um relatorio simples de ranking (produtos mais vendidos, vendas
+    por operador/caixa, itens excluidos etc) em texto puro, sem imagem."""
+    p = Dummy()
+    p.hw("INIT")
+
+    p.set(align="center", bold=True)
+    _linha(p, titulo.upper()[:LARGURA_COLUNAS])
+    p.set(align="left", bold=False)
+    _linha(p, _separador())
+
+    total_qtd = 0
+    total_valor = Decimal("0")
+    for linha in linhas:
+        nome = f"{str(linha[campo_nome]):<24}"[:24]
+        qtd = f"{linha[campo_qtd]:>5}"
+        total = f"{_moeda(linha[campo_total]):>10}"
+        _linha(p, f"{nome} {qtd} {total}")
+        total_qtd += linha[campo_qtd]
+        total_valor += Decimal(str(linha[campo_total]))
+
+    if not linhas:
+        _linha(p, "Sem dados.")
+
+    _linha(p, _separador())
+    p.set(bold=True)
+    _linha(p, _duas_colunas(f"TOTAL: {total_qtd}", _moeda(total_valor)))
+    p.set(bold=False)
+    _linha(p)
+    p.cut()
+    return p.output

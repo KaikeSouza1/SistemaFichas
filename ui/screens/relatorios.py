@@ -1,7 +1,9 @@
 import flet as ft
 
+from config import settings
 from db import repository
 from db.connection import ConexaoIndisponivel
+from printing import escpos_printer, templates
 from ui import componentes, theme
 
 
@@ -81,6 +83,15 @@ def tela(page: ft.Page, ao_voltar) -> ft.Control:
 def _cartao_ranking(page, titulo, linhas, campo_nome, campo_qtd, campo_total):
     itens = []
 
+    def imprimir(e):
+        try:
+            cfg_local = settings.load()
+            dados = templates.relatorio_ranking_bytes(titulo, linhas, campo_nome, campo_qtd, campo_total)
+            escpos_printer.imprimir(cfg_local["impressora_windows"], dados)
+            componentes.aviso(page, "Relatório enviado para a impressora.")
+        except Exception as ex:
+            componentes.aviso(page, f"Não deu para imprimir: {ex}", cor=theme.ALERTA)
+
     def mostrar_detalle(linha):
         # mostra dialogo simples com informacoes da linha
         conteudo = ft.Column([
@@ -110,7 +121,20 @@ def _cartao_ranking(page, titulo, linhas, campo_nome, campo_qtd, campo_total):
         itens = [ft.Text("Sem dados.", color=theme.TEXTO_FRACO, size=13)]
 
     return theme.cartao(
-        ft.Column([ft.Text(titulo, color=theme.TEXTO, weight=ft.FontWeight.W_700), ft.Divider(color=theme.BORDA), *itens], spacing=8),
+        ft.Column(
+            [
+                ft.Row(
+                    [
+                        ft.Text(titulo, color=theme.TEXTO, weight=ft.FontWeight.W_700, expand=True),
+                        ft.IconButton(ft.icons.PRINT, icon_color=theme.TEXTO_SUAVE, icon_size=18, tooltip="Imprimir", on_click=imprimir),
+                    ],
+                    alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
+                ),
+                ft.Divider(color=theme.BORDA),
+                *itens,
+            ],
+            spacing=8,
+        ),
         expand=1,
     )
 
