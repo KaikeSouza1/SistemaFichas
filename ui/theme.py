@@ -37,6 +37,11 @@ def aplicar(page: ft.Page) -> None:
     page.window_min_width = 1024
     page.window_min_height = 700
     page.window_maximized = True
+    # A janela nativa (processo flet.exe) tem seu proprio icone embutido, que
+    # NAO e trocado so por passar --icon no PyInstaller (isso so troca o icone
+    # do .exe em si, visto no Explorer) - sem isso aqui a barra de tarefas
+    # mostra o icone padrao do Flet em vez do logo de fogo.
+    page.window.icon = "icon.ico"
     page.theme = ft.Theme(
         color_scheme=ft.ColorScheme(
             primary=BRASA,
