@@ -5,7 +5,7 @@ num PC principal que outro caixa já ligou?"""
 import flet as ft
 
 from config import settings
-from db import postgres_local
+from db import descoberta, postgres_local
 from ui import componentes, theme
 
 
@@ -35,6 +35,8 @@ def tela(page: ft.Page, ao_escolher) -> ft.Control:
         texto_status.value = "Liberando porta no Firewall..."
         texto_status.update()
         firewall_ok = postgres_local.liberar_firewall(dados_conexao["port"])
+        descoberta.liberar_firewall()
+        descoberta.iniciar_responder_em_background(descoberta.informacoes_deste_servidor)
         texto_status.value = ""
         texto_status.update()
         if firewall_ok:
@@ -50,30 +52,33 @@ def tela(page: ft.Page, ao_escolher) -> ft.Control:
             )
         ao_escolher()
 
-    def escolher_cliente(e):
+    def _conectar_em(ip: str):
+        cfg = settings.load()
+        cfg["postgres"] = {
+            "host": ip,
+            "port": postgres_local.PORTA_PADRAO,
+            "dbname": postgres_local.NOME_BANCO,
+            "user": postgres_local.USUARIO_PADRAO,
+            "password": postgres_local.SENHA_PADRAO,
+            "sslmode": "disable",
+        }
+        cfg["papel_rede"] = "cliente"
+        settings.save(cfg)
+        ao_escolher()
+
+    def abrir_dialogo_manual(e=None):
         campo_ip = theme.campo_texto("IP do computador principal", width=280, autofocus=True)
 
         def confirmar(e2):
             ip = campo_ip.value.strip()
             if not ip:
                 return
-            cfg = settings.load()
-            cfg["postgres"] = {
-                "host": ip,
-                "port": postgres_local.PORTA_PADRAO,
-                "dbname": postgres_local.NOME_BANCO,
-                "user": postgres_local.USUARIO_PADRAO,
-                "password": postgres_local.SENHA_PADRAO,
-                "sslmode": "disable",
-            }
-            cfg["papel_rede"] = "cliente"
-            settings.save(cfg)
             componentes.fechar_dialogo(page, dlg)
-            ao_escolher()
+            _conectar_em(ip)
 
         dlg = ft.AlertDialog(
             modal=True, bgcolor=theme.SURFACE,
-            title=ft.Text("Conectar no computador principal", color=theme.TEXTO),
+            title=ft.Text("Conectar manualmente", color=theme.TEXTO),
             content=ft.Column([
                 ft.Text("Digite o IP mostrado na tela do computador principal deste evento.",
                         color=theme.TEXTO_SUAVE, size=13),
@@ -83,6 +88,58 @@ def tela(page: ft.Page, ao_escolher) -> ft.Control:
                 ft.TextButton("Cancelar", on_click=lambda e2: componentes.fechar_dialogo(page, dlg)),
                 theme.botao_primario("Conectar", on_click=confirmar),
             ],
+        )
+        page.dialog = dlg
+        dlg.open = True
+        page.update()
+
+    def escolher_cliente(e):
+        texto_status.value = "Buscando o principal na rede local..."
+        texto_status.update()
+        try:
+            encontrados = descoberta.buscar_servidores()
+        except Exception:
+            encontrados = []
+        texto_status.value = ""
+        texto_status.update()
+
+        if not encontrados:
+            componentes.aviso(
+                page,
+                "Não encontrei nenhum PC principal na rede automaticamente. Digite o IP manualmente.",
+                cor=theme.ALERTA,
+            )
+            abrir_dialogo_manual()
+            return
+
+        def linha_resultado(info):
+            def conectar(e2):
+                componentes.fechar_dialogo(page, dlg)
+                _conectar_em(info["ip"])
+
+            return ft.Container(
+                content=ft.Row(
+                    [
+                        ft.Column([
+                            ft.Text(info["evento_nome"], color=theme.TEXTO, weight=ft.FontWeight.W_700, size=15),
+                            ft.Text(f"IP: {info['ip']}", color=theme.TEXTO_SUAVE, size=12),
+                        ], spacing=2, expand=True),
+                        theme.botao_primario("Conectar", on_click=conectar, largura=110, altura=40),
+                    ],
+                    alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
+                ),
+                bgcolor=theme.SURFACE_ALTA, border_radius=theme.RADIUS, padding=ft.padding.symmetric(10, 16),
+            )
+
+        dlg = ft.AlertDialog(
+            modal=True, bgcolor=theme.SURFACE,
+            title=ft.Text("Encontrado(s) na rede", color=theme.TEXTO),
+            content=ft.Column(
+                [linha_resultado(info) for info in encontrados]
+                + [ft.TextButton("Não é esse / digitar IP manualmente", on_click=lambda e2: (componentes.fechar_dialogo(page, dlg), abrir_dialogo_manual()))],
+                tight=True, spacing=10, width=340,
+            ),
+            actions=[ft.TextButton("Cancelar", on_click=lambda e2: componentes.fechar_dialogo(page, dlg))],
         )
         page.dialog = dlg
         dlg.open = True
@@ -116,10 +173,10 @@ def tela(page: ft.Page, ao_escolher) -> ft.Control:
                             ft.Column([
                                 ft.Icon(ft.icons.LAN, color=theme.BRASA_CLARA, size=32),
                                 ft.Text("Não, vou conectar em outro", color=theme.TEXTO, weight=ft.FontWeight.W_700),
-                                ft.Text("Outro caixa já é o principal deste evento — vou digitar o IP dele.",
+                                ft.Text("Procura sozinho na rede o PC que já é o principal deste evento.",
                                         color=theme.TEXTO_SUAVE, size=12),
                                 ft.Container(height=8),
-                                theme.botao_secundario("Conectar em outro PC", icone=ft.icons.LINK, on_click=escolher_cliente),
+                                theme.botao_secundario("Buscar na rede", icone=ft.icons.SEARCH, on_click=escolher_cliente),
                             ], spacing=8, horizontal_alignment=ft.CrossAxisAlignment.CENTER),
                             expand=1,
                         ),

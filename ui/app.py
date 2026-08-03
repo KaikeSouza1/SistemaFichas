@@ -1,7 +1,7 @@
 import flet as ft
 
 from config import settings
-from db import repository, sync
+from db import descoberta, repository, sync
 from db.connection import ConexaoIndisponivel
 from ui import theme
 from ui.state import EstadoApp
@@ -42,6 +42,8 @@ def main(page: ft.Page):
                 if not _sync_iniciado[0]:
                     sync.iniciar_em_background()
                     _sync_iniciado[0] = True
+                if cfg.get("papel_rede") == "servidor":
+                    descoberta.iniciar_responder_em_background(descoberta.informacoes_deste_servidor)
             except Exception:
                 # se falhar aqui, deixamos o fluxo normal capturar a excecao
                 pass
