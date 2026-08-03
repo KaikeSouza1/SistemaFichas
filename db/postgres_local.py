@@ -142,20 +142,19 @@ def parar() -> None:
 _NOME_REGRA_FIREWALL = "ADK Fichas - Postgres Local"
 
 
-def liberar_firewall(porta: int = PORTA_PADRAO) -> bool:
-    """Abre a porta do Postgres local no Firewall do Windows, pra outros caixas
-    conseguirem conectar mesmo se a rede da festa cair como 'rede publica'
-    (que bloqueia conexao de entrada por padrao). Precisa de administrador -
-    se este processo nao tiver, falha silenciosamente (retorna False) e quem
-    chamou decide como avisar o usuario."""
+def _regra_firewall_existe() -> bool:
     try:
         verificar = subprocess.run(
             ["netsh", "advfirewall", "firewall", "show", "rule", f"name={_NOME_REGRA_FIREWALL}"],
             capture_output=True, text=True,
         )
-        if verificar.returncode == 0 and "No rules match" not in verificar.stdout:
-            return True
+        return verificar.returncode == 0 and "No rules match" not in verificar.stdout
+    except Exception:
+        return False
 
+
+def _adicionar_regra_firewall(porta: int) -> bool:
+    try:
         resultado = subprocess.run(
             ["netsh", "advfirewall", "firewall", "add", "rule",
              f"name={_NOME_REGRA_FIREWALL}", "dir=in", "action=allow",
@@ -165,6 +164,39 @@ def liberar_firewall(porta: int = PORTA_PADRAO) -> bool:
         return resultado.returncode == 0
     except Exception:
         return False
+
+
+def _adicionar_regra_firewall_elevado(porta: int) -> None:
+    """Pede permissao de administrador do Windows so pra esse comando (nao pro
+    programa inteiro) - aparece uma unica vez, so quando este PC vira
+    'principal' e a tentativa sem elevar falhou. Start-Process -Wait garante
+    que so seguimos depois que o usuario responder ao pedido de permissao."""
+    comando_netsh = (
+        f'advfirewall firewall add rule name=\\"{_NOME_REGRA_FIREWALL}\\" '
+        f'dir=in action=allow protocol=TCP localport={porta}'
+    )
+    try:
+        subprocess.run(
+            ["powershell", "-NoProfile", "-WindowStyle", "Hidden", "-Command",
+             f"Start-Process netsh -ArgumentList '{comando_netsh}' -Verb RunAs -Wait"],
+            capture_output=True, text=True, timeout=60,
+        )
+    except Exception:
+        pass
+
+
+def liberar_firewall(porta: int = PORTA_PADRAO) -> bool:
+    """Abre a porta do Postgres local no Firewall do Windows, pra outros caixas
+    conseguirem conectar mesmo se a rede da festa cair como 'rede publica'
+    (que bloqueia conexao de entrada por padrao). Tenta sem pedir nada primeiro;
+    se falhar (processo sem admin), pede permissao so pra esse comando - o
+    usuario ve UM pedido do Windows, nao precisa configurar nada no atalho."""
+    if _regra_firewall_existe():
+        return True
+    if _adicionar_regra_firewall(porta) and _regra_firewall_existe():
+        return True
+    _adicionar_regra_firewall_elevado(porta)
+    return _regra_firewall_existe()
 
 
 def criar_banco_se_preciso() -> None:
