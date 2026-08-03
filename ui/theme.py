@@ -30,7 +30,7 @@ ESPACO = 12
 
 
 def aplicar(page: ft.Page) -> None:
-    page.title = "SistemaChurrasco"
+    page.title = "ADK Fichas"
     page.bgcolor = BG
     page.theme_mode = ft.ThemeMode.DARK
     page.padding = 0
