@@ -156,7 +156,7 @@ def _tab_evento(page):
                             sessoes = []
                         detalhes = "\n".join([f"{s['caixa_nome']} (aberto por: {s.get('operador_abertura') or 'desconhecido'})" for s in sessoes]) or "Nenhuma informacao disponível."
 
-                        def forcar(e2):
+                        def forcar():
                             try:
                                 repository.fechar_evento_forcado(evento_aberto["id"])
                             except ConexaoIndisponivel:
