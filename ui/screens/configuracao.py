@@ -87,6 +87,7 @@ def _tab_conexao(page, ao_salvar_conexao):
 
     def salvar(e):
         novo_cfg = {
+            **cfg,
             "postgres": montar_pg(),
             "impressora_windows": dropdown_impressora.value or "",
             "caixa_nome": campo_caixa.value.strip(),
@@ -95,9 +96,40 @@ def _tab_conexao(page, ao_salvar_conexao):
         componentes.aviso(page, "Configuração salva.")
         ao_salvar_conexao()
 
+    _ROTULO_PAPEL = {
+        "servidor": "Principal do evento (Postgres local embutido ligado neste PC)",
+        "cliente": "Conectado no PC principal de um evento",
+        "manual": "Avançado (conexão digitada manualmente abaixo)",
+    }
+
+    def trocar_papel_rede(e):
+        def confirmar():
+            novo_cfg = {**settings.load(), "papel_rede": None}
+            settings.save(novo_cfg)
+            ao_salvar_conexao()
+
+        componentes.dialogo_confirmacao(
+            page, "Trocar modo de rede",
+            "Isso volta pra tela de escolha (principal do evento / conectar em outro PC / avançado). Continuar?",
+            ao_confirmar=confirmar, texto_confirmar="Trocar",
+        )
+
     return ft.Container(
         content=ft.Column(
             [
+                theme.cartao(
+                    ft.Row(
+                        [
+                            ft.Column([
+                                ft.Text("Modo de rede deste PC", color=theme.TEXTO, weight=ft.FontWeight.W_700, size=13),
+                                ft.Text(_ROTULO_PAPEL.get(cfg.get("papel_rede"), "Ainda não escolhido"),
+                                        color=theme.TEXTO_SUAVE, size=12),
+                            ], spacing=2, expand=True),
+                            theme.botao_secundario("Trocar", icone=ft.icons.SWAP_HORIZ, on_click=trocar_papel_rede),
+                        ],
+                        alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
+                    ),
+                ),
                 theme.subtitulo("Dados do Postgres central (o PC \"servidor\" da festa) e da impressora deste computador."),
                 campo_host, ft.Row([campo_port, campo_db]), campo_user, campo_senha, dropdown_ssl, campo_caixa,
                 dropdown_impressora,

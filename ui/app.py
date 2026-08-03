@@ -28,14 +28,8 @@ def main(page: ft.Page):
     def verificar_inicio():
         cfg = settings.load()
         if not cfg.get("papel_rede"):
-            # Config antiga (ja tinha host configurado manualmente antes desta tela
-            # existir): nao forcar a escolha, só oferecer o caminho avançado.
-            if cfg.get("postgres", {}).get("host"):
-                cfg["papel_rede"] = "manual"
-                settings.save(cfg)
-            else:
-                mostrar(lambda: papel_rede.tela(page, ao_escolher=verificar_inicio, ao_avancado=_ir_para_avancado))
-                return
+            mostrar(lambda: papel_rede.tela(page, ao_escolher=verificar_inicio, ao_avancado=_ir_para_avancado))
+            return
         if not settings.is_configured(cfg):
             ir_para_configuracao()
             return

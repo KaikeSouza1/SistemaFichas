@@ -49,6 +49,13 @@ def load() -> dict:
         merged = json.loads(json.dumps(DEFAULTS))
         merged.update(data)
         merged["postgres"] = {**DEFAULTS["postgres"], **data.get("postgres", {})}
+        # Migracao unica de configs salvas ANTES da tela de escolha de papel de
+        # rede existir: se ja tinha host preenchido manualmente, respeita isso
+        # e nao interrompe o fluxo perguntando de novo. So roda uma vez (depois
+        # "papel_rede" passa a existir de verdade no arquivo, ainda que None).
+        if "papel_rede" not in data and merged["postgres"].get("host"):
+            merged["papel_rede"] = "manual"
+            save(merged)
         return merged
 
     if CAMINHO_BOOTSTRAP.exists():
@@ -57,15 +64,11 @@ def load() -> dict:
         merged = json.loads(json.dumps(DEFAULTS))
         merged.update(data)
         merged["postgres"] = {**DEFAULTS["postgres"], **data.get("postgres", {})}
+        if "papel_rede" not in data and merged["postgres"].get("host"):
+            merged["papel_rede"] = "manual"
         return merged
 
     return json.loads(json.dumps(DEFAULTS))
-    with open(CONFIG_PATH, "r", encoding="utf-8") as f:
-        data = json.load(f)
-    merged = json.loads(json.dumps(DEFAULTS))
-    merged.update(data)
-    merged["postgres"] = {**DEFAULTS["postgres"], **data.get("postgres", {})}
-    return merged
 
 
 def save(data: dict) -> None:
