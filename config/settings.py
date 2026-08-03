@@ -32,6 +32,10 @@ DEFAULTS = {
     },
     "impressora_windows": "",
     "caixa_nome": "",
+    # "servidor": este PC sobe o Postgres embutido e os outros caixas conectam nele.
+    # "cliente": este PC so conecta no IP de outro PC que esta como servidor.
+    # None: ainda nao escolhido (pergunta na tela de abrir evento).
+    "papel_rede": None,
 }
 
 
