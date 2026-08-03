@@ -23,7 +23,7 @@ def tela(page: ft.Page, ao_salvar_conexao, ao_voltar=None) -> ft.Control:
         unselected_label_color=theme.TEXTO_SUAVE,
         indicator_color=theme.BRASA,
         tabs=[
-            ft.Tab(text="Conexão e impressora", content=_tab_conexao(page, ao_salvar_conexao)),
+            ft.Tab(text="Conexão e impressora", content=_tab_conexao(page, ao_salvar_conexao, ao_voltar)),
             ft.Tab(text="Evento", content=_tab_evento(page)),
             ft.Tab(text="Produtos", content=_tab_produtos(page)),
             ft.Tab(text="Operadores", content=_tab_operadores(page)),
@@ -42,7 +42,7 @@ def tela(page: ft.Page, ao_salvar_conexao, ao_voltar=None) -> ft.Control:
 
 # ---------- Conexão ----------
 
-def _tab_conexao(page, ao_salvar_conexao):
+def _tab_conexao(page, ao_salvar_conexao, ao_voltar=None):
     cfg = settings.load()
 
     campo_caixa = theme.campo_texto("Nome deste caixa/terminal (ex: Caixa 01)", value=cfg["caixa_nome"], width=320)
@@ -67,7 +67,14 @@ def _tab_conexao(page, ao_salvar_conexao):
         }
         settings.save(novo_cfg)
         componentes.aviso(page, "Configuração salva.")
-        ao_salvar_conexao()
+        # Se veio de dentro do app (ja logado, ja com caixa aberto), so volta pra
+        # la - nao faz sentido reiniciar o fluxo inteiro (que sempre termina no
+        # login) so por ter trocado a impressora. O reinicio completo so e usado
+        # no primeiro acesso, antes de logar (quando ao_voltar nao existe).
+        if ao_voltar:
+            ao_voltar()
+        else:
+            ao_salvar_conexao()
 
     _ROTULO_PAPEL = {
         "servidor": "Principal do evento (banco local ligado neste PC)",
