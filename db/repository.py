@@ -37,6 +37,9 @@ def garantir_schema(schema_path: str | None = None) -> None:
         candidates.append(exe_parent / "db" / "schema.sql")
         candidates.append(exe_parent / "schema.sql")
         candidates.append(exe_parent / "db_schema.sql")
+        # PyInstaller (onedir, versoes recentes) guarda os dados embutidos
+        # dentro de _internal/, nao direto do lado do .exe.
+        candidates.append(exe_parent / "_internal" / "db" / "schema.sql")
     # uso do argumento, se fornecido, tem prioridade
     if schema_path:
         candidates.insert(0, Path(schema_path))
