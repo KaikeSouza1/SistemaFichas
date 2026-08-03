@@ -31,7 +31,19 @@ def tela(page: ft.Page, ao_escolher) -> ft.Control:
         cfg["postgres"] = dados_conexao
         cfg["papel_rede"] = "servidor"
         settings.save(cfg)
-        componentes.aviso(page, f"Este PC é o principal do evento. IP para os outros caixas: {dados_conexao['host']}")
+
+        firewall_ok = postgres_local.liberar_firewall(dados_conexao["port"])
+        if firewall_ok:
+            componentes.aviso(page, f"Este PC é o principal do evento. IP para os outros caixas: {dados_conexao['host']}")
+        else:
+            componentes.aviso(
+                page,
+                f"Este PC é o principal. IP: {dados_conexao['host']}. Não consegui liberar a porta "
+                f"{dados_conexao['port']} no Firewall do Windows automaticamente - se os outros caixas "
+                f"não conseguirem conectar, feche o programa e abra de novo clicando com botão direito "
+                f"no atalho e escolhendo \"Executar como administrador\".",
+                cor=theme.ALERTA,
+            )
         ao_escolher()
 
     def escolher_cliente(e):

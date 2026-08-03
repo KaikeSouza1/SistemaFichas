@@ -191,13 +191,127 @@ def tela(page: ft.Page, estado, ao_fechar_caixa, ao_deslogar, ao_abrir_configura
             )
             escpos_printer.imprimir(cfg_local["impressora_windows"], dados)
         except Exception as ex:
-            componentes.aviso(page, f"Venda #{resultado['numero_pedido']} registrada, mas a impressão falhou: {ex}", cor=theme.ALERTA)
+            componentes.aviso(
+                page,
+                f"Venda #{resultado['numero_pedido']} registrada, mas a impressão falhou: {ex}. "
+                f"Abra \"Vendas recentes\" para tentar imprimir de novo.",
+                cor=theme.ALERTA,
+            )
         else:
             total_fichas = sum(i["quantidade"] for i in itens)
             componentes.aviso(page, f"Pedido #{resultado['numero_pedido']}: {total_fichas} ficha(s) impressa(s)!")
 
         estado.limpar_carrinho()
         atualizar_carrinho_ui()
+
+    # ---------- Vendas recentes (cancelar / reimprimir) ----------
+
+    def reimprimir_ficha(venda_id):
+        try:
+            detalhes = repository.detalhes_venda(venda_id)
+        except ConexaoIndisponivel:
+            componentes.dialogo_erro_conexao(page, tentar_de_novo=None)
+            return
+        venda_info = detalhes["venda"]
+        try:
+            dados = templates.fichas_venda_bytes(
+                nome_evento=evento["nome"],
+                numero_pedido=venda_info["numero_pedido"],
+                data_hora=venda_info["criado_em"].strftime("%d/%m/%Y %H:%M:%S"),
+                itens=detalhes["itens"],
+                operador_nome=venda_info["operador_nome"],
+                caixa_nome=venda_info["caixa_nome"],
+            )
+            escpos_printer.imprimir(cfg_local["impressora_windows"], dados)
+        except Exception as ex:
+            componentes.aviso(page, f"Não deu para reimprimir: {ex}", cor=theme.ERRO)
+            return
+        componentes.aviso(page, f"Pedido #{venda_info['numero_pedido']} reimpresso.")
+
+    def abrir_dialogo_vendas_recentes(e):
+        lista_coluna = ft.Column(spacing=8, scroll=ft.ScrollMode.AUTO, height=420)
+
+        def carregar():
+            try:
+                vendas = repository.vendas_recentes(estado.sessao_id, limite=30)
+            except ConexaoIndisponivel:
+                lista_coluna.controls = [ft.Text("Sem conexão.", color=theme.ERRO)]
+                lista_coluna.update()
+                return
+            lista_coluna.controls = [_linha_venda(v) for v in vendas] or [
+                ft.Text("Nenhuma venda ainda nesta sessão.", color=theme.TEXTO_SUAVE)
+            ]
+            lista_coluna.update()
+
+        def cancelar(venda_id, numero_pedido):
+            campo_motivo = theme.campo_texto("Motivo do cancelamento (opcional)", width=320)
+
+            def confirmar(e2):
+                try:
+                    repository.cancelar_venda(venda_id, campo_motivo.value or None)
+                except ConexaoIndisponivel:
+                    componentes.dialogo_erro_conexao(page, tentar_de_novo=None)
+                    return
+                except ValueError as ex:
+                    componentes.aviso(page, str(ex), cor=theme.ALERTA)
+                    return
+                componentes.fechar_dialogo(page, dlg_cancelar)
+                componentes.aviso(page, f"Pedido #{numero_pedido} cancelado.")
+                carregar()
+
+            dlg_cancelar = ft.AlertDialog(
+                modal=True, bgcolor=theme.SURFACE,
+                title=ft.Text(f"Cancelar pedido #{numero_pedido}?", color=theme.TEXTO),
+                content=ft.Column([
+                    ft.Text("Isso desfaz a venda e devolve o estoque controlado, se houver.",
+                            color=theme.TEXTO_SUAVE, size=13),
+                    campo_motivo,
+                ], tight=True, spacing=10),
+                actions=[
+                    ft.TextButton("Voltar", on_click=lambda e2: componentes.fechar_dialogo(page, dlg_cancelar)),
+                    theme.botao_perigo("Cancelar venda", on_click=confirmar),
+                ],
+            )
+            page.dialog = dlg_cancelar
+            dlg_cancelar.open = True
+            page.update()
+
+        def _linha_venda(v):
+            cor_status = theme.ERRO if v["status"] == "CANCELADA" else theme.SUCESSO
+            texto_status = "Cancelada" if v["status"] == "CANCELADA" else "Concluída"
+            return ft.Container(
+                content=ft.Row(
+                    [
+                        ft.Column(
+                            [
+                                ft.Text(f"Pedido #{v['numero_pedido']} · {_fmt(v['valor_total'])}",
+                                        color=theme.TEXTO, weight=ft.FontWeight.W_600, size=14),
+                                ft.Text(f"{v['criado_em'].strftime('%H:%M:%S')} · {v['forma_pagamento']} · {texto_status}",
+                                        color=cor_status, size=12),
+                            ],
+                            expand=True, spacing=2,
+                        ),
+                        ft.IconButton(ft.icons.PRINT, icon_color=theme.TEXTO_SUAVE, tooltip="Reimprimir ficha",
+                                      on_click=lambda e2, vid=v["id"]: reimprimir_ficha(vid)),
+                        ft.IconButton(ft.icons.CANCEL_OUTLINED, icon_color=theme.ERRO, tooltip="Cancelar venda",
+                                      visible=v["status"] == "CONCLUIDA",
+                                      on_click=lambda e2, vid=v["id"], ped=v["numero_pedido"]: cancelar(vid, ped)),
+                    ],
+                    alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
+                ),
+                bgcolor=theme.SURFACE_ALTA, border_radius=theme.RADIUS, padding=ft.padding.symmetric(6, 14),
+            )
+
+        dlg = ft.AlertDialog(
+            modal=True, bgcolor=theme.SURFACE,
+            title=ft.Text("Vendas recentes desta sessão", color=theme.TEXTO),
+            content=ft.Container(lista_coluna, width=420),
+            actions=[ft.TextButton("Fechar", on_click=lambda e2: componentes.fechar_dialogo(page, dlg))],
+        )
+        page.dialog = dlg
+        dlg.open = True
+        page.update()
+        carregar()
 
     # ---------- Troca ----------
 
@@ -368,6 +482,9 @@ def tela(page: ft.Page, estado, ao_fechar_caixa, ao_deslogar, ao_abrir_configura
                                       style=ft.ButtonStyle(color=theme.TEXTO_SUAVE)),
                         ft.TextButton("Troca", icon=ft.icons.SWAP_HORIZ,
                                       on_click=abrir_dialogo_troca,
+                                      style=ft.ButtonStyle(color=theme.TEXTO_SUAVE)),
+                        ft.TextButton("Vendas recentes", icon=ft.icons.RECEIPT_LONG,
+                                      on_click=abrir_dialogo_vendas_recentes,
                                       style=ft.ButtonStyle(color=theme.TEXTO_SUAVE)),
                         ft.TextButton("Relatórios", icon=ft.icons.BAR_CHART,
                                       on_click=lambda e: ao_abrir_relatorios(),

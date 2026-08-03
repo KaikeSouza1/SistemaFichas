@@ -168,20 +168,21 @@ CREATE TABLE trocas (
 
 CREATE INDEX idx_trocas_sessao ON trocas (sessao_caixa_id);
 
--- Contador atomico de numero de pedido, reiniciando por dia (independente de qual
--- caixa/terminal esta vendendo, evitando corrida entre terminais concorrentes).
-CREATE TABLE contador_pedido_diario (
-    dia DATE PRIMARY KEY,
+-- Contador atomico de numero de pedido, reiniciando por EVENTO (nao por dia -
+-- um evento que passa da meia-noite nao pode ter dois "PED: 1" diferentes).
+-- Continua atomico entre caixas/terminais concorrentes do mesmo evento.
+CREATE TABLE contador_pedido_evento (
+    evento_id INTEGER PRIMARY KEY REFERENCES eventos(id),
     ultimo_numero INTEGER NOT NULL DEFAULT 0
 );
 
-CREATE OR REPLACE FUNCTION proximo_numero_pedido() RETURNS INTEGER AS $$
+CREATE OR REPLACE FUNCTION proximo_numero_pedido(p_evento_id INTEGER) RETURNS INTEGER AS $$
 DECLARE
     n INTEGER;
 BEGIN
-    INSERT INTO contador_pedido_diario (dia, ultimo_numero)
-    VALUES (CURRENT_DATE, 1)
-    ON CONFLICT (dia) DO UPDATE SET ultimo_numero = contador_pedido_diario.ultimo_numero + 1
+    INSERT INTO contador_pedido_evento (evento_id, ultimo_numero)
+    VALUES (p_evento_id, 1)
+    ON CONFLICT (evento_id) DO UPDATE SET ultimo_numero = contador_pedido_evento.ultimo_numero + 1
     RETURNING ultimo_numero INTO n;
     RETURN n;
 END;

@@ -82,6 +82,33 @@ def garantir_tabela_sync_controle() -> None:
         )
 
 
+def garantir_contador_por_evento() -> None:
+    """Troca o contador de numero de pedido de 'por dia' pra 'por evento' -
+    separado do garantir_schema principal pra tambem migrar bancos que ja
+    existiam antes dessa mudanca (evita dois PED:1 num evento que passa da
+    meia-noite)."""
+    with conectar() as conn, conn.cursor() as cur:
+        cur.execute(
+            "CREATE TABLE IF NOT EXISTS contador_pedido_evento ("
+            "evento_id INTEGER PRIMARY KEY REFERENCES eventos(id), "
+            "ultimo_numero INTEGER NOT NULL DEFAULT 0)"
+        )
+        cur.execute("DROP FUNCTION IF EXISTS proximo_numero_pedido()")
+        cur.execute(
+            """CREATE OR REPLACE FUNCTION proximo_numero_pedido(p_evento_id INTEGER) RETURNS INTEGER AS $$
+               DECLARE
+                   n INTEGER;
+               BEGIN
+                   INSERT INTO contador_pedido_evento (evento_id, ultimo_numero)
+                   VALUES (p_evento_id, 1)
+                   ON CONFLICT (evento_id) DO UPDATE SET ultimo_numero = contador_pedido_evento.ultimo_numero + 1
+                   RETURNING ultimo_numero INTO n;
+                   RETURN n;
+               END;
+               $$ LANGUAGE plpgsql"""
+        )
+
+
 def listar_operadores(somente_ativos=True):
     with conectar() as conn, conn.cursor() as cur:
         if somente_ativos:
@@ -329,7 +356,10 @@ def registrar_venda(sessao_id, caixa_id, operador_id, itens, forma_pagamento):
     """itens: lista de dicts {produto_id, nome, preco, quantidade, custo (opcional)}.
     Consome estoque dos produtos com estoque_controlado=TRUE."""
     with conectar() as conn, conn.cursor() as cur:
-        cur.execute("SELECT proximo_numero_pedido() AS n")
+        cur.execute(
+            """SELECT proximo_numero_pedido(evento_id) AS n FROM sessoes_caixa WHERE id = %s""",
+            (sessao_id,),
+        )
         numero_pedido = cur.fetchone()["n"]
 
         valor_total = sum(Decimal(str(i["preco"])) * i["quantidade"] for i in itens)
@@ -408,11 +438,22 @@ def trocas_da_sessao(sessao_id):
 
 
 def cancelar_venda(venda_id, motivo):
+    """Marca a venda como CANCELADA e devolve o estoque dos itens com
+    estoque_controlado. So cancela vendas ainda CONCLUIDA (evita cancelar
+    duas vezes e devolver estoque em dobro)."""
     with conectar() as conn, conn.cursor() as cur:
         cur.execute(
-            "UPDATE vendas SET status='CANCELADA', motivo_cancelamento=%s WHERE id=%s",
+            "UPDATE vendas SET status='CANCELADA', motivo_cancelamento=%s WHERE id=%s AND status='CONCLUIDA'",
             (motivo, venda_id),
         )
+        if cur.rowcount == 0:
+            raise ValueError("Venda nao encontrada ou ja cancelada.")
+        cur.execute("SELECT produto_id, quantidade FROM itens_venda WHERE venda_id = %s", (venda_id,))
+        for item in cur.fetchall():
+            cur.execute(
+                "UPDATE produtos SET estoque_atual = estoque_atual + %s WHERE id = %s AND estoque_controlado",
+                (item["quantidade"], item["produto_id"]),
+            )
 
 
 def vendas_recentes(sessao_id, limite=20):
@@ -424,6 +465,28 @@ def vendas_recentes(sessao_id, limite=20):
             (sessao_id, limite),
         )
         return cur.fetchall()
+
+
+def detalhes_venda(venda_id):
+    """Tudo que e preciso pra reimprimir a ficha de uma venda ja registrada."""
+    with conectar() as conn, conn.cursor() as cur:
+        cur.execute(
+            """SELECT v.id, v.numero_pedido, v.criado_em, v.forma_pagamento, v.status,
+                      c.nome AS caixa_nome, o.nome AS operador_nome
+               FROM vendas v
+               JOIN caixas c ON c.id = v.caixa_id
+               JOIN operadores o ON o.id = v.operador_id
+               WHERE v.id = %s""",
+            (venda_id,),
+        )
+        venda = cur.fetchone()
+        cur.execute(
+            """SELECT nome_produto AS nome, quantidade, preco_unitario AS preco
+               FROM itens_venda WHERE venda_id = %s""",
+            (venda_id,),
+        )
+        itens = cur.fetchall()
+    return {"venda": venda, "itens": itens}
 
 
 # ---------- Fechamento ----------

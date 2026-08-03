@@ -52,6 +52,41 @@ def tela(page: ft.Page, estado, ao_concluir, ao_tentar_de_novo, ao_voltar=None) 
             texto_confirmar="Fechar caixa",
         )
 
+    def fechar_de_verdade():
+        try:
+            repository.fechar_sessao(estado.sessao_id, estado.operador_id)
+        except ConexaoIndisponivel:
+            componentes.dialogo_erro_conexao(page, tentar_de_novo=None)
+            return
+        estado.encerrar_sessao_local()
+        ao_concluir()
+
+    def mostrar_erro_impressao(ex):
+        def tentar_de_novo_impressao(e2):
+            componentes.fechar_dialogo(page, dlg_erro)
+            efetivar_fechamento()
+
+        def fechar_sem_imprimir(e2):
+            componentes.fechar_dialogo(page, dlg_erro)
+            fechar_de_verdade()
+
+        dlg_erro = ft.AlertDialog(
+            modal=True, bgcolor=theme.SURFACE,
+            title=ft.Text("Erro ao imprimir o fechamento", color=theme.ERRO),
+            content=ft.Text(
+                f"{ex}\n\nO caixa AINDA NÃO foi fechado. Pode ajeitar a impressora "
+                f"(recolocar papel, etc.) e tentar de novo, ou fechar sem imprimir.",
+                color=theme.TEXTO_SUAVE,
+            ),
+            actions=[
+                ft.TextButton("Fechar sem imprimir", on_click=fechar_sem_imprimir),
+                theme.botao_primario("Tentar imprimir de novo", on_click=tentar_de_novo_impressao),
+            ],
+        )
+        page.dialog = dlg_erro
+        dlg_erro.open = True
+        page.update()
+
     def efetivar_fechamento():
         try:
             dados = templates.fechamento_caixa_bytes(
@@ -64,16 +99,10 @@ def tela(page: ft.Page, estado, ao_concluir, ao_tentar_de_novo, ao_voltar=None) 
             )
             escpos_printer.imprimir(cfg_local["impressora_windows"], dados)
         except Exception as ex:
-            componentes.aviso(page, f"Não deu para imprimir o fechamento: {ex}", cor=theme.ALERTA)
-
-        try:
-            repository.fechar_sessao(estado.sessao_id, estado.operador_id)
-        except ConexaoIndisponivel:
-            componentes.dialogo_erro_conexao(page, tentar_de_novo=None)
+            mostrar_erro_impressao(ex)
             return
 
-        estado.encerrar_sessao_local()
-        ao_concluir()
+        fechar_de_verdade()
 
     return ft.Container(
         content=ft.Column(

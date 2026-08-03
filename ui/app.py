@@ -38,6 +38,7 @@ def main(page: ft.Page):
             try:
                 repository.garantir_schema()
                 repository.garantir_tabela_sync_controle()
+                repository.garantir_contador_por_evento()
                 if not _sync_iniciado[0]:
                     sync.iniciar_em_background()
                     _sync_iniciado[0] = True

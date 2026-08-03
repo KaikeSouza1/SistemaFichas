@@ -37,14 +37,28 @@ def disponivel() -> bool:
 
 def _ip_local() -> str:
     """IP deste PC na rede local, sem gerar trafego de rede de verdade
-    (so consulta o hostname - evita qualquer prompt de firewall do Windows)."""
+    (so consulta o hostname - evita qualquer prompt de firewall do Windows).
+    Ignora loopback (127.x) e link-local sem DHCP (169.254.x - APIPA, comum em
+    adaptador virtual desconectado tipo VPN/VirtualBox) - esses nunca servem
+    pra outro PC conectar. Prefere faixas de rede local reais (192.168/10/172.16-31)."""
     try:
-        for ip in socket.gethostbyname_ex(socket.gethostname())[2]:
-            if not ip.startswith("127."):
-                return ip
+        candidatos = [
+            ip for ip in socket.gethostbyname_ex(socket.gethostname())[2]
+            if not ip.startswith("127.") and not ip.startswith("169.254.")
+        ]
     except OSError:
-        pass
-    return "127.0.0.1"
+        candidatos = []
+
+    def _prioridade(ip: str) -> int:
+        if ip.startswith("192.168.") or ip.startswith("10."):
+            return 0
+        partes = ip.split(".")
+        if ip.startswith("172.") and len(partes) > 1 and 16 <= int(partes[1]) <= 31:
+            return 0
+        return 1
+
+    candidatos.sort(key=_prioridade)
+    return candidatos[0] if candidatos else "127.0.0.1"
 
 
 def _preparar_datadir() -> None:
@@ -123,6 +137,34 @@ def iniciar() -> dict:
 def parar() -> None:
     if disponivel() and status():
         subprocess.run([str(_PG_CTL), "-D", str(PASTA_DADOS), "stop", "-m", "fast"], capture_output=True)
+
+
+_NOME_REGRA_FIREWALL = "ADK Fichas - Postgres Local"
+
+
+def liberar_firewall(porta: int = PORTA_PADRAO) -> bool:
+    """Abre a porta do Postgres local no Firewall do Windows, pra outros caixas
+    conseguirem conectar mesmo se a rede da festa cair como 'rede publica'
+    (que bloqueia conexao de entrada por padrao). Precisa de administrador -
+    se este processo nao tiver, falha silenciosamente (retorna False) e quem
+    chamou decide como avisar o usuario."""
+    try:
+        verificar = subprocess.run(
+            ["netsh", "advfirewall", "firewall", "show", "rule", f"name={_NOME_REGRA_FIREWALL}"],
+            capture_output=True, text=True,
+        )
+        if verificar.returncode == 0 and "No rules match" not in verificar.stdout:
+            return True
+
+        resultado = subprocess.run(
+            ["netsh", "advfirewall", "firewall", "add", "rule",
+             f"name={_NOME_REGRA_FIREWALL}", "dir=in", "action=allow",
+             "protocol=TCP", f"localport={porta}"],
+            capture_output=True, text=True,
+        )
+        return resultado.returncode == 0
+    except Exception:
+        return False
 
 
 def criar_banco_se_preciso() -> None:
