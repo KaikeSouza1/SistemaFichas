@@ -1,0 +1,9 @@
+.venv/
+__pycache__/
+*.pyc
+dist/
+build/
+*.spec
+_app_window*.png
+_screenshot*.png
+config.default.json

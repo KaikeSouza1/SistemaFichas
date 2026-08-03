@@ -1,0 +1,4 @@
+flet==0.24.1
+psycopg[binary]==3.2.10
+pywin32==311
+python-escpos==3.1
