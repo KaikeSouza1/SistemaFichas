@@ -94,7 +94,11 @@ def _enviar_para_central(origem_uuid: str, evento_id: int, dump: dict) -> None:
 
 def ciclo() -> int:
     """Roda uma passada: tenta mandar todos os eventos fechados pendentes.
-    Retorna quantos eventos foram sincronizados com sucesso."""
+    Retorna quantos eventos foram sincronizados com sucesso. Se o central nao
+    estiver configurado nesta instalacao (sem config/central.local.json), nao
+    faz nada - o evento fica pendente e sera enviado quando/se configurado."""
+    if CENTRAL is None:
+        return 0
     origem = _origem_uuid()
     pendentes = repository.eventos_fechados_pendentes_sync()
     enviados = 0
