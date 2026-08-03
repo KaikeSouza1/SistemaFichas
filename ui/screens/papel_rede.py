@@ -21,7 +21,7 @@ def tela(page: ft.Page, ao_escolher) -> ft.Control:
         try:
             dados_conexao = postgres_local.iniciar()
             postgres_local.criar_banco_se_preciso()
-        except postgres_local.PostgresLocalIndisponivel as ex:
+        except Exception as ex:
             componentes.aviso(page, f"Não consegui iniciar o banco local: {ex}", cor=theme.ERRO)
             texto_status.value = ""
             texto_status.update()
@@ -32,7 +32,7 @@ def tela(page: ft.Page, ao_escolher) -> ft.Control:
         cfg["papel_rede"] = "servidor"
         settings.save(cfg)
 
-        texto_status.value = "Liberando porta no Firewall (pode aparecer um pedido de permissão do Windows)..."
+        texto_status.value = "Liberando porta no Firewall..."
         texto_status.update()
         firewall_ok = postgres_local.liberar_firewall(dados_conexao["port"])
         texto_status.value = ""
@@ -43,7 +43,7 @@ def tela(page: ft.Page, ao_escolher) -> ft.Control:
             componentes.aviso(
                 page,
                 f"Este PC é o principal. IP: {dados_conexao['host']}. Não consegui liberar a porta "
-                f"{dados_conexao['port']} no Firewall do Windows (talvez a permissão tenha sido recusada) - "
+                f"{dados_conexao['port']} no Firewall do Windows automaticamente (precisa de administrador) - "
                 f"se os outros caixas não conseguirem conectar, feche o programa e abra de novo clicando com "
                 f"botão direito no atalho e escolhendo \"Executar como administrador\".",
                 cor=theme.ALERTA,

@@ -70,11 +70,14 @@ def _preparar_datadir() -> None:
     senha_arquivo = PASTA_DADOS.parent / "_senha_tmp.txt"
     senha_arquivo.write_text(SENHA_PADRAO, encoding="utf-8")
     try:
-        resultado = subprocess.run(
-            [str(_INITDB), "-D", str(PASTA_DADOS), "-U", USUARIO_PADRAO,
-             "--pwfile", str(senha_arquivo), "-E", "UTF8", "--locale=C"],
-            capture_output=True, text=True,
-        )
+        try:
+            resultado = subprocess.run(
+                [str(_INITDB), "-D", str(PASTA_DADOS), "-U", USUARIO_PADRAO,
+                 "--pwfile", str(senha_arquivo), "-E", "UTF8", "--locale=C"],
+                capture_output=True, text=True, timeout=30,
+            )
+        except subprocess.TimeoutExpired:
+            raise PostgresLocalIndisponivel("initdb demorou demais (mais de 30s) e foi interrompido.")
         if resultado.returncode != 0:
             raise PostgresLocalIndisponivel(f"initdb falhou: {resultado.stderr}")
     finally:
@@ -99,10 +102,13 @@ def status() -> bool:
     """True se a instancia local estiver rodando."""
     if not disponivel() or not (PASTA_DADOS / "PG_VERSION").exists():
         return False
-    resultado = subprocess.run(
-        [str(_PG_CTL), "-D", str(PASTA_DADOS), "status"],
-        capture_output=True, text=True,
-    )
+    try:
+        resultado = subprocess.run(
+            [str(_PG_CTL), "-D", str(PASTA_DADOS), "status"],
+            capture_output=True, text=True, timeout=10,
+        )
+    except subprocess.TimeoutExpired:
+        return False
     return resultado.returncode == 0
 
 
@@ -115,10 +121,13 @@ def iniciar() -> dict:
         # NAO usar capture_output aqui: pg_ctl start deixa o postgres.exe (que
         # roda pra sempre) herdar o pipe de saida, e o Python nunca ve o EOF -
         # subprocess.run() trava para sempre esperando o pipe fechar.
-        resultado = subprocess.run(
-            [str(_PG_CTL), "-D", str(PASTA_DADOS), "-l", str(log), "-w", "start"],
-            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-        )
+        try:
+            resultado = subprocess.run(
+                [str(_PG_CTL), "-D", str(PASTA_DADOS), "-l", str(log), "-w", "start"],
+                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=30,
+            )
+        except subprocess.TimeoutExpired:
+            raise PostgresLocalIndisponivel("O banco local demorou demais (mais de 30s) pra iniciar e foi interrompido.")
         if resultado.returncode != 0:
             trecho_log = log.read_text(encoding="utf-8", errors="ignore")[-800:] if log.exists() else ""
             raise PostgresLocalIndisponivel(f"Nao consegui iniciar o Postgres local (codigo {resultado.returncode}): {trecho_log}")
@@ -136,67 +145,39 @@ def iniciar() -> dict:
 
 def parar() -> None:
     if disponivel() and status():
-        subprocess.run([str(_PG_CTL), "-D", str(PASTA_DADOS), "stop", "-m", "fast"], capture_output=True)
+        try:
+            subprocess.run([str(_PG_CTL), "-D", str(PASTA_DADOS), "stop", "-m", "fast"], capture_output=True, timeout=15)
+        except subprocess.TimeoutExpired:
+            pass
 
 
 _NOME_REGRA_FIREWALL = "ADK Fichas - Postgres Local"
 
 
-def _regra_firewall_existe() -> bool:
+def liberar_firewall(porta: int = PORTA_PADRAO) -> bool:
+    """Abre a porta do Postgres local no Firewall do Windows, pra outros caixas
+    conseguirem conectar mesmo se a rede da festa cair como 'rede publica'
+    (que bloqueia conexao de entrada por padrao). So tenta SEM pedir elevacao -
+    um pedido de permissao do Windows (UAC) pode abrir atras da janela do app
+    e travar tudo esperando um clique que o usuario nunca ve. Se falhar (sem
+    admin), quem chamou avisa o usuario a rodar como administrador manualmente."""
     try:
         verificar = subprocess.run(
             ["netsh", "advfirewall", "firewall", "show", "rule", f"name={_NOME_REGRA_FIREWALL}"],
-            capture_output=True, text=True,
+            capture_output=True, text=True, timeout=10,
         )
-        return verificar.returncode == 0 and "No rules match" not in verificar.stdout
-    except Exception:
-        return False
+        if verificar.returncode == 0 and "No rules match" not in verificar.stdout:
+            return True
 
-
-def _adicionar_regra_firewall(porta: int) -> bool:
-    try:
         resultado = subprocess.run(
             ["netsh", "advfirewall", "firewall", "add", "rule",
              f"name={_NOME_REGRA_FIREWALL}", "dir=in", "action=allow",
              "protocol=TCP", f"localport={porta}"],
-            capture_output=True, text=True,
+            capture_output=True, text=True, timeout=10,
         )
         return resultado.returncode == 0
     except Exception:
         return False
-
-
-def _adicionar_regra_firewall_elevado(porta: int) -> None:
-    """Pede permissao de administrador do Windows so pra esse comando (nao pro
-    programa inteiro) - aparece uma unica vez, so quando este PC vira
-    'principal' e a tentativa sem elevar falhou. Start-Process -Wait garante
-    que so seguimos depois que o usuario responder ao pedido de permissao."""
-    comando_netsh = (
-        f'advfirewall firewall add rule name=\\"{_NOME_REGRA_FIREWALL}\\" '
-        f'dir=in action=allow protocol=TCP localport={porta}'
-    )
-    try:
-        subprocess.run(
-            ["powershell", "-NoProfile", "-WindowStyle", "Hidden", "-Command",
-             f"Start-Process netsh -ArgumentList '{comando_netsh}' -Verb RunAs -Wait"],
-            capture_output=True, text=True, timeout=60,
-        )
-    except Exception:
-        pass
-
-
-def liberar_firewall(porta: int = PORTA_PADRAO) -> bool:
-    """Abre a porta do Postgres local no Firewall do Windows, pra outros caixas
-    conseguirem conectar mesmo se a rede da festa cair como 'rede publica'
-    (que bloqueia conexao de entrada por padrao). Tenta sem pedir nada primeiro;
-    se falhar (processo sem admin), pede permissao so pra esse comando - o
-    usuario ve UM pedido do Windows, nao precisa configurar nada no atalho."""
-    if _regra_firewall_existe():
-        return True
-    if _adicionar_regra_firewall(porta) and _regra_firewall_existe():
-        return True
-    _adicionar_regra_firewall_elevado(porta)
-    return _regra_firewall_existe()
 
 
 def criar_banco_se_preciso() -> None:
