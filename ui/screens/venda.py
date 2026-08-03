@@ -1,3 +1,5 @@
+import threading
+import time
 from datetime import datetime
 
 import flet as ft
@@ -7,6 +9,20 @@ from db import repository
 from db.connection import ConexaoIndisponivel
 from printing import escpos_printer, templates
 from ui import componentes, theme
+
+INTERVALO_VERIFICAR_NOVIDADE_SEGUNDOS = 20
+
+
+def _assinatura_catalogo(produtos, categorias, evento):
+    """Resumo comparavel do que este terminal tem carregado, pra saber se
+    mudou algo desde a ultima vez (produto novo/editado, categoria nova,
+    nome/rodape do evento alterado em outro caixa)."""
+    parte_produtos = tuple(sorted(
+        (p["id"], p["nome"], str(p["preco"]), p["oculto"], p["categoria_id"]) for p in produtos
+    ))
+    parte_categorias = tuple(sorted((c["id"], c["nome"]) for c in categorias))
+    parte_evento = (evento["nome"], evento["rodape"])
+    return (parte_produtos, parte_categorias, parte_evento)
 
 FORMAS_PAGAMENTO = [
     ("DINHEIRO", "Dinheiro"),
@@ -142,6 +158,81 @@ def tela(page: ft.Page, estado, ao_fechar_caixa, ao_deslogar, ao_abrir_configura
         )
 
     chips_categorias.controls = [_chip("Todos", None)] + [_chip(c["nome"], c["id"]) for c in categorias]
+
+    assinatura_carregada = {"valor": _assinatura_catalogo(produtos, categorias, evento)}
+    banner_novidade = ft.Container(visible=False)
+
+    def recarregar_dados(e=None):
+        """Produto/categoria/nome do evento alterado em outro caixa nao aparece
+        sozinho aqui - essa tela so carrega quando abre. Isso busca de novo."""
+        nonlocal produtos, categorias, evento
+        try:
+            evento = repository.obter_evento_aberto()
+            categorias = repository.listar_categorias()
+            novos_produtos = repository.listar_produtos(somente_ativos=True, incluir_ocultos=True)
+            produtos = [p for p in novos_produtos if not p["oculto"]]
+        except ConexaoIndisponivel:
+            componentes.aviso(page, "Não deu para atualizar - sem conexão.", cor=theme.ERRO)
+            return
+        chips_categorias.controls = [_chip("Todos", None)] + [_chip(c["nome"], c["id"]) for c in categorias]
+        categoria_selecionada["id"] = None
+        texto_nome_evento.value = evento["nome"]
+        atualizar_grade()
+        texto_nome_evento.update()
+        assinatura_carregada["valor"] = _assinatura_catalogo(produtos, categorias, evento)
+        banner_novidade.visible = False
+        banner_novidade.update()
+        if e is not None:
+            componentes.aviso(page, "Atualizado.")
+
+    banner_novidade.content = ft.Row(
+        [
+            ft.Row(
+                [ft.Icon(ft.icons.SYNC, color=theme.ALERTA, size=18),
+                 ft.Text("Tem novidade no cadastro (produto/evento) que ainda não apareceu aqui.",
+                          color=theme.TEXTO, size=13)],
+                spacing=8,
+            ),
+            theme.botao_secundario("Atualizar agora", on_click=recarregar_dados),
+        ],
+        alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
+    )
+    banner_novidade.bgcolor = theme.SURFACE_ALTA
+    banner_novidade.padding = ft.padding.symmetric(8, 16)
+    banner_novidade.border_radius = theme.RADIUS
+    banner_novidade.border = ft.border.all(1, theme.ALERTA)
+
+    _polling_ativo = {"on": True}
+
+    def _verificar_novidade_em_segundo_plano():
+        while _polling_ativo["on"]:
+            time.sleep(INTERVALO_VERIFICAR_NOVIDADE_SEGUNDOS)
+            if not _polling_ativo["on"]:
+                return
+            try:
+                evento_db = repository.obter_evento_aberto()
+                categorias_db = repository.listar_categorias()
+                produtos_db = repository.listar_produtos(somente_ativos=True, incluir_ocultos=True)
+                produtos_db = [p for p in produtos_db if not p["oculto"]]
+            except ConexaoIndisponivel:
+                continue
+            if not evento_db:
+                continue
+            assinatura_nova = _assinatura_catalogo(produtos_db, categorias_db, evento_db)
+            if assinatura_nova != assinatura_carregada["valor"] and not banner_novidade.visible:
+                banner_novidade.visible = True
+                try:
+                    banner_novidade.update()
+                except Exception:
+                    return  # tela ja foi trocada/pagina fechou
+
+    def _parar_polling_e_chamar(fn):
+        def wrapper(*args, **kwargs):
+            _polling_ativo["on"] = False
+            return fn(*args, **kwargs)
+        return wrapper
+
+    threading.Thread(target=_verificar_novidade_em_segundo_plano, daemon=True).start()
 
     # ---------- Finalizar venda ----------
 
@@ -463,17 +554,30 @@ def tela(page: ft.Page, estado, ao_fechar_caixa, ao_deslogar, ao_abrir_configura
 
     # ---------- Layout ----------
 
+    texto_nome_evento = ft.Text(evento["nome"], color=theme.TEXTO, size=16, weight=ft.FontWeight.W_700)
+
     barra_topo = ft.Container(
         content=ft.Row(
             [
                 ft.Row(
-                    [ft.Image(src="logo_adk.png", height=28, fit=ft.ImageFit.CONTAIN),
-                     ft.Text(evento["nome"], color=theme.TEXTO, size=16, weight=ft.FontWeight.W_700)],
+                    [ft.Image(src="logo_adk.png", height=28, fit=ft.ImageFit.CONTAIN), texto_nome_evento],
                     spacing=8,
                 ),
-                ft.Text(f"{estado.caixa_nome} · {estado.operador_nome}", color=theme.TEXTO_SUAVE, size=13),
+                ft.Column(
+                    [
+                        ft.Text(f"{estado.caixa_nome} · {estado.operador_nome}", color=theme.TEXTO_SUAVE, size=13),
+                    ]
+                    + (
+                        [ft.Text(f"IP deste PC (principal): {cfg_local['postgres']['host']}",
+                                  color=theme.TEXTO_FRACO, size=10)]
+                        if cfg_local.get("papel_rede") == "servidor" else []
+                    ),
+                    spacing=0,
+                ),
                 ft.Row(
                     [
+                        ft.IconButton(ft.icons.REFRESH, icon_color=theme.TEXTO_SUAVE, tooltip="Atualizar produtos/evento",
+                                      on_click=recarregar_dados),
                         ft.TextButton("Sangria", icon=ft.icons.ARROW_DOWNWARD,
                                       on_click=lambda e: abrir_dialogo_movimento("Sangria", "SANGRIA"),
                                       style=ft.ButtonStyle(color=theme.TEXTO_SUAVE)),
@@ -487,15 +591,16 @@ def tela(page: ft.Page, estado, ao_fechar_caixa, ao_deslogar, ao_abrir_configura
                                       on_click=abrir_dialogo_vendas_recentes,
                                       style=ft.ButtonStyle(color=theme.TEXTO_SUAVE)),
                         ft.TextButton("Relatórios", icon=ft.icons.BAR_CHART,
-                                      on_click=lambda e: ao_abrir_relatorios(),
+                                      on_click=lambda e: _parar_polling_e_chamar(ao_abrir_relatorios)(),
                                       style=ft.ButtonStyle(color=theme.TEXTO_SUAVE)),
                         ft.TextButton("Configurações", icon=ft.icons.SETTINGS,
-                                      on_click=lambda e: ao_abrir_configuracao(),
+                                      on_click=lambda e: _parar_polling_e_chamar(ao_abrir_configuracao)(),
                                       style=ft.ButtonStyle(color=theme.TEXTO_SUAVE)),
                         ft.TextButton("Trocar operador", icon=ft.icons.LOGOUT,
-                                      on_click=lambda e: ao_deslogar(),
+                                      on_click=lambda e: _parar_polling_e_chamar(ao_deslogar)(),
                                       style=ft.ButtonStyle(color=theme.TEXTO_SUAVE)),
-                        theme.botao_secundario("Fechar caixa", icone=ft.icons.POINT_OF_SALE, on_click=lambda e: ao_fechar_caixa()),
+                        theme.botao_secundario("Fechar caixa", icone=ft.icons.POINT_OF_SALE,
+                                                on_click=lambda e: _parar_polling_e_chamar(ao_fechar_caixa)()),
                     ],
                     spacing=4,
                 ),
@@ -533,7 +638,7 @@ def tela(page: ft.Page, estado, ao_fechar_caixa, ao_deslogar, ao_abrir_configura
             ft.Row(
                 [
                     ft.Container(
-                        content=ft.Column([chips_categorias, grade_produtos], spacing=14, expand=True),
+                        content=ft.Column([banner_novidade, chips_categorias, grade_produtos], spacing=14, expand=True),
                         padding=18, expand=True,
                     ),
                     painel_carrinho,
