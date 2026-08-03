@@ -67,6 +67,18 @@ def garantir_schema(schema_path: str | None = None) -> None:
         # commit feito automaticamente pelo contextmanager `conectar`
 
 
+def garantir_tabela_sync_controle() -> None:
+    """Cria a tabela sync_controle se ainda nao existir - separado do
+    garantir_schema principal pra tambem funcionar em bancos que ja existiam
+    antes dessa tabela ser criada (nao so em bancos novos)."""
+    with conectar() as conn, conn.cursor() as cur:
+        cur.execute(
+            "CREATE TABLE IF NOT EXISTS sync_controle ("
+            "evento_id INTEGER PRIMARY KEY REFERENCES eventos(id), "
+            "sincronizado_em TIMESTAMPTZ NOT NULL DEFAULT now())"
+        )
+
+
 def listar_operadores(somente_ativos=True):
     with conectar() as conn, conn.cursor() as cur:
         if somente_ativos:
@@ -598,3 +610,100 @@ def fechar_evento_forcado(evento_id):
             "UPDATE eventos SET status='FECHADA', data_fechamento=now() WHERE id=%s",
             (evento_id,),
         )
+
+
+# ---------- Sincronizacao com o servidor central ----------
+
+
+def eventos_fechados_pendentes_sync():
+    """Eventos ja FECHADOS neste banco local que ainda nao foram confirmados
+    no servidor central (ver db/sync.py)."""
+    with conectar() as conn, conn.cursor() as cur:
+        cur.execute(
+            """SELECT id, nome, rodape, data_abertura, data_fechamento
+               FROM eventos
+               WHERE status = 'FECHADA'
+                 AND id NOT IN (SELECT evento_id FROM sync_controle)
+               ORDER BY data_fechamento"""
+        )
+        return cur.fetchall()
+
+
+def marcar_evento_sincronizado(evento_id):
+    with conectar() as conn, conn.cursor() as cur:
+        cur.execute(
+            "INSERT INTO sync_controle (evento_id) VALUES (%s) ON CONFLICT (evento_id) DO NOTHING",
+            (evento_id,),
+        )
+
+
+def dump_evento_completo(evento_id):
+    """Junta tudo desse evento (sessoes, vendas, itens, trocas, excluidos) num
+    dict so, ja com nomes (nao so IDs) - pra mandar pro central sem o central
+    precisar conhecer os produtos/operadores/caixas deste banco local especifico."""
+    with conectar() as conn, conn.cursor() as cur:
+        cur.execute("SELECT id, nome, rodape, data_abertura, data_fechamento FROM eventos WHERE id = %s", (evento_id,))
+        evento = cur.fetchone()
+
+        cur.execute(
+            """SELECT s.id, c.nome AS caixa_nome, s.valor_abertura, s.data_abertura, s.data_fechamento,
+                      oa.nome AS operador_abertura, of.nome AS operador_fechamento
+               FROM sessoes_caixa s
+               JOIN caixas c ON c.id = s.caixa_id
+               LEFT JOIN operadores oa ON oa.id = s.operador_abertura_id
+               LEFT JOIN operadores of ON of.id = s.operador_fechamento_id
+               WHERE s.evento_id = %s ORDER BY s.data_abertura""",
+            (evento_id,),
+        )
+        sessoes = cur.fetchall()
+
+        cur.execute(
+            """SELECT v.id, c.nome AS caixa_nome, o.nome AS operador_nome, v.numero_pedido,
+                      v.forma_pagamento, v.valor_total, v.status, v.criado_em
+               FROM vendas v
+               JOIN sessoes_caixa s ON s.id = v.sessao_caixa_id
+               JOIN caixas c ON c.id = v.caixa_id
+               JOIN operadores o ON o.id = v.operador_id
+               WHERE s.evento_id = %s ORDER BY v.criado_em""",
+            (evento_id,),
+        )
+        vendas = cur.fetchall()
+
+        cur.execute(
+            """SELECT iv.venda_id, iv.nome_produto, iv.quantidade, iv.preco_unitario,
+                      iv.custo_unitario, iv.subtotal
+               FROM itens_venda iv
+               JOIN vendas v ON v.id = iv.venda_id
+               JOIN sessoes_caixa s ON s.id = v.sessao_caixa_id
+               WHERE s.evento_id = %s""",
+            (evento_id,),
+        )
+        itens_venda = cur.fetchall()
+
+        cur.execute(
+            """SELECT t.nome_saida, t.quantidade_saida, t.valor_saida, t.nome_entrada,
+                      t.quantidade_entrada, t.valor_entrada, t.diferenca_valor, t.motivo, t.criado_em
+               FROM trocas t
+               JOIN sessoes_caixa s ON s.id = t.sessao_caixa_id
+               WHERE s.evento_id = %s""",
+            (evento_id,),
+        )
+        trocas = cur.fetchall()
+
+        cur.execute(
+            """SELECT ie.nome_produto, ie.quantidade, ie.valor, ie.motivo, ie.criado_em
+               FROM itens_excluidos ie
+               JOIN sessoes_caixa s ON s.id = ie.sessao_caixa_id
+               WHERE s.evento_id = %s""",
+            (evento_id,),
+        )
+        itens_excluidos = cur.fetchall()
+
+    return {
+        "evento": evento,
+        "sessoes": sessoes,
+        "vendas": vendas,
+        "itens_venda": itens_venda,
+        "trocas": trocas,
+        "itens_excluidos": itens_excluidos,
+    }

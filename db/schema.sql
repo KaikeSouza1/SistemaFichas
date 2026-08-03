@@ -189,3 +189,11 @@ $$ LANGUAGE plpgsql;
 
 -- Operador padrao para o primeiro acesso (PIN deve ser trocado em Configuracoes).
 INSERT INTO operadores (nome, pin) VALUES ('Administrador', '0000') ON CONFLICT DO NOTHING;
+
+-- Marca quais eventos (deste banco LOCAL) ja foram enviados com sucesso pro
+-- servidor central (ver db/sync.py). Um evento so entra aqui depois de FECHADO
+-- e confirmado no central - antes disso o processo de sync fica tentando de novo.
+CREATE TABLE sync_controle (
+    evento_id INTEGER PRIMARY KEY REFERENCES eventos(id),
+    sincronizado_em TIMESTAMPTZ NOT NULL DEFAULT now()
+);

@@ -7,3 +7,7 @@ build/
 _app_window*.png
 _screenshot*.png
 config.default.json
+tools/postgres/
+tools/dados_evento/
+tools/postgres.log
+tools/_senha_tmp.txt

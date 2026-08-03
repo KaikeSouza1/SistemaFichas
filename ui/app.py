@@ -1,16 +1,17 @@
 import flet as ft
 
 from config import settings
-from db import repository
+from db import repository, sync
 from db.connection import ConexaoIndisponivel
 from ui import theme
 from ui.state import EstadoApp
-from ui.screens import abertura_caixa, configuracao, evento, fechamento, login, relatorios, venda
+from ui.screens import abertura_caixa, configuracao, evento, fechamento, login, papel_rede, relatorios, venda
 
 
 def main(page: ft.Page):
     theme.aplicar(page)
     estado = EstadoApp()
+    _sync_iniciado = [False]
 
     def mostrar(builder):
         # Monta o novo conteudo ANTES de limpar a tela atual: se o builder
@@ -26,6 +27,15 @@ def main(page: ft.Page):
 
     def verificar_inicio():
         cfg = settings.load()
+        if not cfg.get("papel_rede"):
+            # Config antiga (ja tinha host configurado manualmente antes desta tela
+            # existir): nao forcar a escolha, só oferecer o caminho avançado.
+            if cfg.get("postgres", {}).get("host"):
+                cfg["papel_rede"] = "manual"
+                settings.save(cfg)
+            else:
+                mostrar(lambda: papel_rede.tela(page, ao_escolher=verificar_inicio, ao_avancado=_ir_para_avancado))
+                return
         if not settings.is_configured(cfg):
             ir_para_configuracao()
             return
@@ -33,6 +43,10 @@ def main(page: ft.Page):
             # Garantir que o schema exista no banco remoto (aplica se faltar)
             try:
                 repository.garantir_schema()
+                repository.garantir_tabela_sync_controle()
+                if not _sync_iniciado[0]:
+                    sync.iniciar_em_background()
+                    _sync_iniciado[0] = True
             except Exception:
                 # se falhar aqui, deixamos o fluxo normal capturar a excecao
                 pass
@@ -50,6 +64,12 @@ def main(page: ft.Page):
 
     def ir_para_configuracao():
         mostrar(lambda: configuracao.tela(page, ao_salvar_conexao=verificar_inicio, ao_voltar=None))
+
+    def _ir_para_avancado():
+        cfg = settings.load()
+        cfg["papel_rede"] = "manual"
+        settings.save(cfg)
+        ir_para_configuracao()
 
     def ir_para_login():
         mostrar(lambda: login.tela(
