@@ -11,3 +11,4 @@ tools/postgres/
 tools/dados_evento/
 tools/postgres.log
 tools/_senha_tmp.txt
+tools/origem_uuid.txt
