@@ -910,6 +910,25 @@ def resumo_sessao(sessao_id):
         )
         itens_vendidos = cur.fetchall()
 
+        # Fichas de churrasco pagas entram na MESMA lista "itens_vendidos" do
+        # fechamento (relatorio impresso e tela) - sem isso, o dinheiro delas
+        # ja contava no total (ver `por_forma` acima), mas elas nunca
+        # apareciam na relacao de itens vendidos, dando a falsa impressao de
+        # que o fechamento "nao pegava" as fichas de churrasco (bug real
+        # reportado pelo usuario, 2026-08-11). Mesmo filtro AND f.pago do
+        # `por_forma` acima - ficha vendida "no fio" so entra aqui depois que
+        # alguem finalizar o pagamento de verdade.
+        cur.execute(
+            """SELECT f.nome_carne AS nome_produto, COUNT(*) AS quantidade,
+                      f.valor AS preco_unitario, SUM(f.valor) AS total
+               FROM fichas_churrasco f
+               WHERE f.sessao_caixa_id = %s AND f.status = 'EMITIDA' AND f.pago
+               GROUP BY f.nome_carne, f.valor
+               ORDER BY f.nome_carne""",
+            (sessao_id,),
+        )
+        itens_vendidos = itens_vendidos + cur.fetchall()
+
         cur.execute(
             """SELECT COALESCE(SUM(quantidade), 0) AS qtd, COALESCE(SUM(valor), 0) AS total
                FROM itens_excluidos WHERE sessao_caixa_id = %s""",

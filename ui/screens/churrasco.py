@@ -701,7 +701,16 @@ def tela(page: ft.Page, estado, ao_voltar) -> ft.Control:
             options=[ft.dropdown.Option("", "Todas")] + [ft.dropdown.Option(cor, _nome_cor(cor)) for cor in cores_disponiveis],
             border_color=theme.BORDA, focused_border_color=theme.BRASA, bgcolor=theme.SURFACE_ALTA,
         )
-        lista_resultados = ft.Column(spacing=8, scroll=ft.ScrollMode.AUTO, height=380)
+        # Bug real reportado pelo usuario/cliente (2026-08-11, telas menores):
+        # `lista_resultados` tinha altura FIXA (380px) e o dialogo em volta
+        # nao tinha altura nem scroll proprio - numa tela mais baixa o
+        # dialogo passava da altura disponivel e o botao "Fechar" (fixo nas
+        # `actions` do AlertDialog) acabava sobrepondo o final da lista de
+        # resultados (ex: "Fechar" por cima de "Finalizar pagamento" da
+        # ultima ficha visivel). Corrigido dando scroll+altura ao dialogo
+        # INTEIRO (ver `dlg` mais abaixo) - so uma area de rolagem, sem
+        # `lista_resultados` competir com o dialogo por scroll/altura proprios.
+        lista_resultados = ft.Column(spacing=8)
 
         # Pedido do usuario (bug real, 2026-08-11): confirmar cancelamento e
         # finalizar pagamento eram dialogos SEPARADOS abertos por CIMA deste -
@@ -907,12 +916,13 @@ def tela(page: ft.Page, estado, ao_voltar) -> ft.Control:
             tight=True, spacing=12, visible=True,
         )
 
+        altura_dialogo = max(300, min(560, (page.height or 760) - 200))
         dlg = ft.AlertDialog(
             modal=True, bgcolor=theme.SURFACE,
             title=ft.Text("Buscar fichas", color=theme.TEXTO),
             content=ft.Column(
                 [painel_busca, painel_confirmar_cancelamento, painel_pagamento_pendente],
-                tight=True, spacing=12, width=460,
+                tight=True, spacing=12, width=460, height=altura_dialogo, scroll=ft.ScrollMode.AUTO,
             ),
             actions=[ft.TextButton("Fechar", on_click=lambda e: componentes.fechar_dialogo(page, dlg))],
         )
