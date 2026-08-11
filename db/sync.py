@@ -6,24 +6,22 @@ demore dias pra achar conexao, ex: evento no meio do nada), e nunca escreve
 nada de volta no banco local: e so upload de historico, uma via.
 """
 
-import sys
 import threading
 import time
 import traceback
 import uuid
 from decimal import Decimal
-from pathlib import Path
 
 import psycopg
 from psycopg.types.json import Jsonb
 
 from config.central import CENTRAL
+from config.settings import PASTA_DADOS_LOCAIS
 from db import repository
 
 INTERVALO_SEGUNDOS = 120
 
-_PASTA_APP = Path(sys.executable).parent if getattr(sys, "frozen", False) else Path(__file__).resolve().parent.parent
-_ARQUIVO_ORIGEM = _PASTA_APP / "tools" / "origem_uuid.txt"
+_ARQUIVO_ORIGEM = PASTA_DADOS_LOCAIS / "origem_uuid.txt"
 
 
 def _origem_uuid() -> str:

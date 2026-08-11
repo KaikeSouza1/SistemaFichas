@@ -9,6 +9,7 @@ ASCII puro sempre. Revisitar depois de testar em impressora real.
 
 import unicodedata
 from decimal import Decimal
+from io import BytesIO
 
 from escpos.printer import Dummy
 from PIL import Image, ImageDraw, ImageFont
@@ -75,17 +76,18 @@ def _imagem_nome_produto(nome: str, largura_px: int = LARGURA_PONTOS) -> Image.I
     nome = _sem_acentos(nome.upper())
     medidor = ImageDraw.Draw(Image.new("L", (1, 1)))
 
-    tamanho_fonte = 120
     margem = 16
+    tamanho_fonte = 120
     fonte = _carregar_fonte(tamanho_fonte)
-    while tamanho_fonte > 48:
+    caixa = medidor.textbbox((0, 0), nome, font=fonte)
+    # Piso baixo o bastante pra nomes longos ("PORCAO DE FRITAS") realmente
+    # coubessem - um piso alto (o antigo, 48) fazia o laço desistir cedo demais
+    # e desenhar largo demais pra caber, cortando o texto dos dois lados.
+    while caixa[2] - caixa[0] > largura_px - margem and tamanho_fonte > 24:
+        tamanho_fonte -= 4
         fonte = _carregar_fonte(tamanho_fonte)
         caixa = medidor.textbbox((0, 0), nome, font=fonte)
-        if caixa[2] - caixa[0] <= largura_px - margem:
-            break
-        tamanho_fonte -= 4
 
-    caixa = medidor.textbbox((0, 0), nome, font=fonte)
     largura_texto, altura_texto = caixa[2] - caixa[0], caixa[3] - caixa[1]
     altura_img = altura_texto + 28
     # Modo coluna (ESC*) imprime em bandas de 24px; se a altura nao for
@@ -93,7 +95,10 @@ def _imagem_nome_produto(nome: str, largura_px: int = LARGURA_PONTOS) -> Image.I
     altura_img = ((altura_img + 23) // 24) * 24
     imagem = Image.new("L", (largura_px, altura_img), color=255)
     desenho = ImageDraw.Draw(imagem)
-    x = (largura_px - largura_texto) // 2 - caixa[0]
+    # Nunca desenhar com x negativo: se ainda assim nao coubesse, e melhor
+    # cortar so a direita (nome legivel do inicio) do que cortar dos dois
+    # lados e virar sopa de letra (era exatamente o bug: "RCAO DE FRIT").
+    x = max(0, (largura_px - largura_texto) // 2 - caixa[0])
     y = (altura_img - altura_texto) // 2 - caixa[1]
     desenho.text((x, y), nome, font=fonte, fill=0)
     return imagem
@@ -123,7 +128,8 @@ def _linha(p, texto: str = "") -> None:
     p.text(_sem_acentos(texto) + "\n")
 
 
-def _ficha_de_um_item(p, nome_evento, numero_pedido, data_hora, nome_item, preco, operador_nome, caixa_nome):
+def _ficha_de_um_item(p, nome_evento, numero_pedido, data_hora, nome_item, preco, operador_nome, caixa_nome,
+                        ocultar_valor=False, largura_pontos=LARGURA_PONTOS, cortador_automatico=True):
     logo_pequeno = _imagem_logo(160)
     if logo_pequeno:
         p.set(align="center")
@@ -142,16 +148,29 @@ def _ficha_de_um_item(p, nome_evento, numero_pedido, data_hora, nome_item, preco
     # usa o comando ESC * (antigo/universal) em vez do GS v 0 padrao, que
     # essa impressora nao reconheceu (testado em hardware real - saiu lixo).
     p.set(align="center")
-    p.image(_imagem_nome_produto(nome_item), impl="bitImageColumn")
+    p.image(_imagem_nome_produto(nome_item, largura_pontos), impl="bitImageColumn")
     _linha(p)
 
     # Preco, operador e rodape: alinhados a esquerda, compactos, sem linhas
     # em branco entre eles (igual ao modelo de referencia).
-    p.set(align="left", bold=True)
-    _linha(p, f"R$ {_moeda(preco)}")
-    p.set(bold=False)
+    if not ocultar_valor:
+        p.set(align="left", bold=True)
+        _linha(p, f"R$ {_moeda(preco)}")
+    p.set(align="left", bold=False)
     _linha(p, f"OPER: {operador_nome} - CAIXA: {caixa_nome}")
-    p.cut()
+    if cortador_automatico:
+        p.cut()
+    else:
+        # Impressoras Bluetooth portateis (as que os vendedores usam andando
+        # pela festa) normalmente NAO tem guilhotina automatica - so a Elgin
+        # i9 do PC tem. p.cut() sempre avanca 6 linhas de papel pra dar
+        # margem pra guilhotina cortar; nessa impressora o corte nunca
+        # acontece e esse avanco todo fica so como espaco em branco
+        # desperdicado. Aqui avancamos bem pouco e marcamos uma linha
+        # pontilhada, pra cortar/rasgar na mao no lugar certo.
+        p.set(align="center", bold=False)
+        _linha(p, "- " * (LARGURA_COLUNAS // 2))
+        p.print_and_feed(2)
 
 
 def fichas_venda_bytes(
@@ -161,19 +180,195 @@ def fichas_venda_bytes(
     itens: list[dict],
     operador_nome: str,
     caixa_nome: str,
+    largura_pontos: int = LARGURA_PONTOS,
+    cortador_automatico: bool = True,
 ) -> bytes:
-    """itens: lista de {"nome": str, "quantidade": int, "preco": Decimal}.
-    Gera uma ficha separada (com corte) para CADA unidade de CADA item —
-    comprar 6 cervejas imprime 6 fichas individuais de cerveja."""
+    """itens: lista de {"nome": str, "quantidade": int, "preco": Decimal,
+    "ocultar_valor": bool}. Gera uma ficha separada (com corte) para CADA
+    unidade de CADA item — comprar 6 cervejas imprime 6 fichas individuais de
+    cerveja. Itens de combo ja devem chegar aqui expandidos nos componentes,
+    cada um ja com seu proprio "ocultar_valor" (ver
+    repository.expandir_itens_para_impressao - a flag vem do cadastro do
+    PRODUTO, nao e mais uma escolha feita na hora de vender).
+
+    largura_pontos: largura da imagem do nome do produto. A Elgin i9 (USB,
+    PC) usa o padrao de 58mm (LARGURA_PONTOS); impressoras Bluetooth de
+    80mm usadas no celular (ver db/modo_celular.py) devem passar 576.
+
+    cortador_automatico: a Elgin i9 (PC) tem guilhotina automatica - deixa
+    True. Impressoras Bluetooth portateis normalmente NAO tem - passe False
+    pra nao desperdicar papel com o avanco que a guilhotina inexistente
+    nunca usa (ver _ficha_de_um_item)."""
     p = Dummy()
     p.hw("INIT")
     for item in itens:
         for _ in range(item["quantidade"]):
             _ficha_de_um_item(
                 p, nome_evento, numero_pedido, data_hora,
-                item["nome"], item["preco"], operador_nome, caixa_nome,
+                item["nome"], item["preco"], operador_nome, caixa_nome, item.get("ocultar_valor", False),
+                largura_pontos, cortador_automatico,
             )
     return p.output
+
+
+def ficha_churrasco_bytes(
+    nome_evento: str,
+    numero_ficha: int,
+    nome_carne: str,
+    nome_cliente: str,
+    valor,
+    data_hora: str,
+    operador_nome: str,
+    caixa_nome: str,
+    nome_churrasqueira: str,
+    largura_pontos: int = LARGURA_PONTOS,
+    cortador_automatico: bool = True,
+) -> bytes:
+    """Ficha do modulo de churrasco (venda por unidade, com nome do cliente -
+    ver ui/screens/churrasco.py). So a via do cliente e impressa - o canhoto
+    de papel que ficava com o time deixou de ser necessario, o proprio banco
+    ja registra quem vendeu pra quem (ver db/repository.registrar_ficha_churrasco_do_bloco).
+
+    Layout pedido pelo usuario (2026-08-11): o NOME DO CLIENTE e o destaque
+    principal - usa a mesma imagem grande que antes era so pro nome da carne
+    (`_imagem_nome_produto`, generica, apesar do nome). O NUMERO da ficha
+    tambem e grande (ESC ! double_width/height), mas SO o numero, sem "No"
+    na frente. A CARNE virou secundaria - texto pequeno, junto de VALOR/data,
+    em vez de imagem grande."""
+    p = Dummy()
+    p.hw("INIT")
+
+    logo_pequeno = _imagem_logo(160)
+    if logo_pequeno:
+        p.set(align="center")
+        p.image(logo_pequeno, impl="bitImageColumn")
+
+    p.set(align="center", bold=True)
+    _linha(p, nome_evento.upper()[:LARGURA_COLUNAS])
+    p.set(align="left", bold=False)
+    _linha(p, _separador())
+
+    p.set(align="center")
+    p.image(_imagem_nome_produto(nome_cliente, largura_pontos), impl="bitImageColumn")
+    _linha(p)
+
+    p.set(align="left", bold=True)
+    _linha(p, f"CHURRASQUEIRA: {nome_churrasqueira}")
+    p.set(align="left", bold=False)
+    _linha(p)
+
+    p.set(align="center", bold=True, double_width=True, double_height=True)
+    _linha(p, f"{numero_ficha}")
+    p.set(align="center", bold=False, normal_textsize=True)
+    _linha(p)
+
+    p.set(align="left", bold=True)
+    _linha(p, f"CARNE: {nome_carne}")
+    _linha(p, f"VALOR: R$ {_moeda(valor)}")
+    p.set(align="left", bold=False)
+    _linha(p, _duas_colunas(data_hora, f"OPER: {operador_nome}"))
+    _linha(p, f"CAIXA: {caixa_nome}")
+
+    if cortador_automatico:
+        p.cut()
+    else:
+        p.set(align="center", bold=False)
+        _linha(p, "- " * (LARGURA_COLUNAS // 2))
+        p.print_and_feed(2)
+    return p.output
+
+
+def ficha_churrasco_preview_png(
+    nome_evento: str,
+    numero_ficha: int,
+    nome_carne: str,
+    nome_cliente: str,
+    valor,
+    data_hora: str,
+    operador_nome: str,
+    caixa_nome: str,
+    nome_churrasqueira: str,
+    largura_pontos: int = LARGURA_PONTOS,
+) -> bytes:
+    """Gera uma IMAGEM (PNG) com o mesmo conteudo da ficha real, pra
+    pre-visualizar dentro do proprio app sem precisar de impressora termica
+    de verdade. Pedido do usuario: se a impressora escolhida em Configurações
+    for "Microsoft Print to PDF" (ou qualquer outra sem suporte real a
+    ESC/POS), mandar os bytes crus pra ela so produz lixo - essa
+    pre-visualizacao sempre funciona, independente de qual impressora esta
+    configurada (ver ui/screens/churrasco.py, botão "Pré-visualizar")."""
+    largura = largura_pontos
+    margem = 20
+
+    fonte_normal = _carregar_fonte(20)
+    fonte_negrito = _carregar_fonte(22)
+    fonte_numero = _carregar_fonte(46)
+
+    logo = _imagem_logo(min(160, largura - 2 * margem))
+    # Nome do CLIENTE e o destaque principal (mesma imagem grande que antes
+    # era so pra carne - `_imagem_nome_produto` e generica, apesar do nome).
+    nome_img = _imagem_nome_produto(nome_cliente, largura - 2 * margem)
+
+    medidor = ImageDraw.Draw(Image.new("L", (1, 1)))
+
+    def altura_linha(fonte):
+        caixa = medidor.textbbox((0, 0), "Agy", font=fonte)
+        return (caixa[3] - caixa[1]) + 12
+
+    linha_churrasqueira = (f"CHURRASQUEIRA: {nome_churrasqueira}", fonte_negrito)
+    linhas_rodape = [
+        (f"CARNE: {nome_carne}", fonte_negrito),
+        (f"VALOR: R$ {_moeda(valor)}", fonte_negrito),
+        (data_hora, fonte_normal),
+        (f"OPER: {operador_nome} - CAIXA: {caixa_nome}", fonte_normal),
+    ]
+
+    altura_total = margem
+    if logo:
+        altura_total += logo.height + 10
+    altura_total += altura_linha(fonte_negrito) + 8  # nome do evento + separador
+    altura_total += nome_img.height + 10
+    altura_total += altura_linha(fonte_negrito) + 10  # churrasqueira
+    altura_total += altura_linha(fonte_numero) + 10  # numero grande
+    altura_total += sum(altura_linha(fonte) for _, fonte in linhas_rodape)
+    altura_total += margem
+
+    canvas = Image.new("RGB", (largura, altura_total), color="white")
+    desenho = ImageDraw.Draw(canvas)
+
+    def centralizar(texto, fonte, y):
+        texto = _sem_acentos(texto)
+        caixa = desenho.textbbox((0, 0), texto, font=fonte)
+        x = max(margem, (largura - (caixa[2] - caixa[0])) // 2)
+        desenho.text((x, y), texto, font=fonte, fill="black")
+
+    y = margem
+    if logo:
+        canvas.paste(logo.convert("RGB"), ((largura - logo.width) // 2, y))
+        y += logo.height + 10
+
+    centralizar(nome_evento.upper()[:LARGURA_COLUNAS], fonte_negrito, y)
+    y += altura_linha(fonte_negrito)
+    desenho.line([(margem, y), (largura - margem, y)], fill="black", width=1)
+    y += 8
+
+    canvas.paste(nome_img.convert("RGB"), ((largura - nome_img.width) // 2, y))
+    y += nome_img.height + 10
+
+    texto_churrasqueira, fonte_churrasqueira = linha_churrasqueira
+    desenho.text((margem, y), _sem_acentos(texto_churrasqueira), font=fonte_churrasqueira, fill="black")
+    y += altura_linha(fonte_churrasqueira) + 10
+
+    centralizar(str(numero_ficha), fonte_numero, y)
+    y += altura_linha(fonte_numero) + 10
+
+    for texto, fonte in linhas_rodape:
+        desenho.text((margem, y), _sem_acentos(texto), font=fonte, fill="black")
+        y += altura_linha(fonte)
+
+    buffer = BytesIO()
+    canvas.save(buffer, format="PNG")
+    return buffer.getvalue()
 
 
 def fechamento_caixa_bytes(

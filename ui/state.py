@@ -11,6 +11,7 @@ class EstadoApp:
     caixa_nome: str = ""
     operador_id: int | None = None
     operador_nome: str = ""
+    operador_administrador: bool = False
     sessao_id: int | None = None
     carrinho: list = field(default_factory=list)  # [{produto_id, nome, preco, custo, quantidade}]
 
@@ -27,5 +28,6 @@ class EstadoApp:
     def deslogar(self):
         self.operador_id = None
         self.operador_nome = ""
+        self.operador_administrador = False
         self.sessao_id = None
         self.limpar_carrinho()

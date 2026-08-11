@@ -13,6 +13,13 @@ from pathlib import Path
 CONFIG_DIR = Path(os.getenv("APPDATA", str(Path.home()))) / "SistemaChurrasco"
 CONFIG_PATH = CONFIG_DIR / "config.json"
 
+# Pasta pra dados que o programa precisa GRAVAR em tempo de execucao (banco
+# Postgres embutido, log, etc) - nunca pode ser dentro da pasta de instalacao
+# (ex: "C:\Program Files\..."), porque o Windows bloqueia escrita ali pra
+# usuario comum (so o instalador, rodando como admin, consegue escrever lá).
+# %LOCALAPPDATA% e sempre gravavel pelo usuario atual, sem precisar elevar.
+PASTA_DADOS_LOCAIS = Path(os.getenv("LOCALAPPDATA", str(Path.home()))) / "SistemaChurrasco"
+
 # Se existir um "config.default.json" do lado do executavel, ele e usado como
 # ponto de partida no primeiro uso desta maquina (pensado pra builds que ja
 # saem configuradas com a conexao de um cliente/demonstracao especifico).
@@ -56,8 +63,13 @@ def load() -> dict:
     # pre-preenchidos). Caso nenhum exista, retornar os DEFAULTS. A conexao com
     # o Postgres NUNCA vem daqui - e sempre resolvida pela escolha de papel de
     # rede (ver ui/screens/papel_rede.py e db/postgres_local.py).
+    # "utf-8-sig" em vez de "utf-8": le normal se nao tiver BOM, e tambem
+    # aceita se tiver (ex: alguem abriu o config.json no Notepad pra editar a
+    # mao e salvou de novo - o Notepad grava BOM por padrao no Windows; com
+    # "utf-8" simples isso quebrava o json.load com "Unexpected UTF-8 BOM" e
+    # o app nem chegava a abrir a janela).
     if CONFIG_PATH.exists():
-        with open(CONFIG_PATH, "r", encoding="utf-8") as f:
+        with open(CONFIG_PATH, "r", encoding="utf-8-sig") as f:
             data = json.load(f)
         merged = json.loads(json.dumps(DEFAULTS))
         merged.update(data)
@@ -65,7 +77,7 @@ def load() -> dict:
         return merged
 
     if CAMINHO_BOOTSTRAP.exists():
-        with open(CAMINHO_BOOTSTRAP, "r", encoding="utf-8") as f:
+        with open(CAMINHO_BOOTSTRAP, "r", encoding="utf-8-sig") as f:
             data = json.load(f)
         merged = json.loads(json.dumps(DEFAULTS))
         merged.update(data)

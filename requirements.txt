@@ -2,3 +2,5 @@ flet==0.24.1
 psycopg[binary]==3.2.10
 pywin32==311
 python-escpos==3.1
+qrcode==7.4.2
+certifi==2026.7.22

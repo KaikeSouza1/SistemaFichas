@@ -21,6 +21,8 @@ def tela(page: ft.Page, ao_voltar) -> ft.Control:
             por_operador = repository.vendas_por_operador(evento_id)
             por_caixa = repository.vendas_por_caixa(evento_id)
             excluidos = repository.itens_excluidos_por_evento(evento_id)
+            churrasco_por_carne = repository.resumo_churrasco_por_carne(evento_id)
+            churrasco_por_cor = repository.resumo_churrasco_por_cor(evento_id)
         except ConexaoIndisponivel:
             corpo.controls = [componentes.tela_estado_erro("Não deu para carregar os relatórios.", lambda: carregar(evento_id))]
             if atualizar_pagina:
@@ -37,7 +39,11 @@ def tela(page: ft.Page, ao_voltar) -> ft.Control:
                 spacing=16, expand=True, vertical_alignment=ft.CrossAxisAlignment.START,
             ),
             ft.Row(
-                [_cartao_ranking(page, "Itens excluídos do carrinho", excluidos, "nome_produto", "quantidade", "total")],
+                [
+                    _cartao_ranking(page, "Itens excluídos do carrinho", excluidos, "nome_produto", "quantidade", "total"),
+                    _cartao_ranking(page, "Churrasco - por carne", churrasco_por_carne, "nome_carne", "qtd", "total"),
+                    _cartao_ranking(page, "Churrasco - por churrasqueira (cor)", churrasco_por_cor, "cor_hex", "qtd", "total"),
+                ],
                 spacing=16, expand=True, vertical_alignment=ft.CrossAxisAlignment.START,
             ),
         ]

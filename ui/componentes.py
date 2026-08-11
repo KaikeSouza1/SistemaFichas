@@ -7,6 +7,17 @@ from ui import theme
 
 
 def fechar_dialogo(page: ft.Page, dlg: ft.AlertDialog):
+    """Fecha `dlg`. NUNCA abrir um `ft.AlertDialog` novo por CIMA de outro já
+    aberto reatribuindo `page.dialog` (e tentar "restaurar" o de baixo depois
+    trocando `page.dialog` de volta) - no Flet isso "solta" o dialogo de
+    baixo de um jeito que reatribuir de volta NÃO remonta os manipuladores de
+    clique corretamente: os botões ficam mortos (nenhum clique faz nada) -
+    bug real reportado pelo usuário (2026-08-11) depois de usar "Pré-visualizar
+    ficha" no módulo Churrasco. Se precisar mostrar algo "por cima" de um
+    dialogo que já está aberto, use um painel alternando `visible=True/False`
+    DENTRO do mesmo `ft.AlertDialog` (ver `ui/screens/churrasco.py`,
+    `abrir_dialogo_venda`/`abrir_busca_fichas` - nenhum dos dois reatribui
+    `page.dialog` mais de uma vez)."""
     dlg.open = False
     page.update()
 

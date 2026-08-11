@@ -1,6 +1,8 @@
+import base64
 import threading
 import time
 from datetime import datetime
+from decimal import Decimal, InvalidOperation
 
 import flet as ft
 
@@ -10,15 +12,19 @@ from db.connection import ConexaoIndisponivel
 from printing import escpos_printer, templates
 from ui import componentes, theme
 
-INTERVALO_VERIFICAR_NOVIDADE_SEGUNDOS = 20
+INTERVALO_VERIFICAR_NOVIDADE_SEGUNDOS = 8
 
 
 def _assinatura_catalogo(produtos, categorias, evento):
     """Resumo comparavel do que este terminal tem carregado, pra saber se
     mudou algo desde a ultima vez (produto novo/editado, categoria nova,
-    nome/rodape do evento alterado em outro caixa)."""
+    nome/rodape do evento alterado em outro caixa, ou ESTOQUE mudou - inclui
+    estoque_atual de proposito, senao um caixa vendendo o ultimo item de um
+    produto com estoque controlado nunca avisava os outros caixas que
+    acabou, so na proxima vez que alguem clicasse "Atualizar" na mao)."""
     parte_produtos = tuple(sorted(
-        (p["id"], p["nome"], str(p["preco"]), p["oculto"], p["categoria_id"]) for p in produtos
+        (p["id"], p["nome"], str(p["preco"]), p["oculto"], p["categoria_id"], p["estoque_atual"])
+        for p in produtos
     ))
     parte_categorias = tuple(sorted((c["id"], c["nome"]) for c in categorias))
     parte_evento = (evento["nome"], evento["rodape"])
@@ -31,14 +37,34 @@ FORMAS_PAGAMENTO = [
     ("PIX", "Pix"),
     ("CONSUMACAO", "Consumação"),
 ]
+NOME_FORMA_PAGAMENTO = dict(FORMAS_PAGAMENTO)
+NOME_FORMA_PAGAMENTO["VARIAS"] = "Pagamento dividido"
 
 
-def tela(page: ft.Page, estado, ao_fechar_caixa, ao_deslogar, ao_abrir_configuracao, ao_abrir_relatorios, ao_tentar_de_novo) -> ft.Control:
+def _parse_moeda(texto: str) -> Decimal:
+    texto = (texto or "").strip().replace(".", "").replace(",", ".")
+    if not texto:
+        raise ValueError("valor vazio")
+    try:
+        return Decimal(texto)
+    except InvalidOperation:
+        raise ValueError(f"valor invalido: {texto}")
+
+
+def _fmt_num(valor) -> str:
+    """Igual _fmt(), mas sem o prefixo 'R$' - pra preencher campos de texto
+    editaveis (o usuario digita so o numero)."""
+    return f"{valor:,.2f}".replace(",", "@").replace(".", ",").replace("@", ".")
+
+
+def tela(page: ft.Page, estado, ao_fechar_caixa, ao_deslogar, ao_abrir_configuracao, ao_abrir_relatorios,
+         ao_abrir_churrasco, ao_tentar_de_novo) -> ft.Control:
     try:
         evento = repository.obter_evento_aberto()
         categorias = repository.listar_categorias()
         produtos = repository.listar_produtos(somente_ativos=True, incluir_ocultos=True)
         produtos = [p for p in produtos if not p["oculto"]]
+        qtd_pedidos_caixa = {"valor": repository.contar_vendas_caixa_no_evento(estado.caixa_id, evento["id"])}
     except ConexaoIndisponivel:
         return componentes.tela_estado_erro("Não deu para carregar os produtos.", ao_tentar_de_novo)
 
@@ -46,6 +72,10 @@ def tela(page: ft.Page, estado, ao_fechar_caixa, ao_deslogar, ao_abrir_configura
     categoria_selecionada = {"id": None}
 
     total_text = ft.Text("R$ 0,00", size=24, weight=ft.FontWeight.W_800, color=theme.TEXTO)
+    texto_qtd_pedidos = ft.Text(
+        f"{qtd_pedidos_caixa['valor']} pedido(s) feito(s) neste caixa",
+        color=theme.TEXTO_SUAVE, size=12, weight=ft.FontWeight.W_600,
+    )
     carrinho_coluna = ft.Column(spacing=8, scroll=ft.ScrollMode.AUTO, expand=True)
     grade_produtos = ft.GridView(expand=True, max_extent=175, child_aspect_ratio=1.15, spacing=12, run_spacing=12, padding=4)
     chips_categorias = ft.Row(spacing=8, scroll=ft.ScrollMode.AUTO)
@@ -121,16 +151,31 @@ def tela(page: ft.Page, estado, ao_fechar_caixa, ao_deslogar, ao_abrir_configura
 
     # ---------- Grade de produtos ----------
 
+    LIMITE_ESTOQUE_BAIXO = 5
+
+    def _aviso_estoque(produto):
+        if not produto["estoque_controlado"] or produto["estoque_atual"] is None:
+            return None
+        estoque = produto["estoque_atual"]
+        if estoque <= 0:
+            return ft.Text("ESGOTADO", color="#FFFFFF", size=11, weight=ft.FontWeight.W_800,
+                            bgcolor=theme.ERRO)
+        if estoque <= LIMITE_ESTOQUE_BAIXO:
+            return ft.Text(f"Só restam {estoque}!", color="#FFFFFF", size=11, weight=ft.FontWeight.W_800,
+                            bgcolor=theme.ALERTA)
+        return None
+
     def _produto_tile(produto):
+        conteudo = [
+            ft.Text(produto["nome"], color="#FFFFFF", weight=ft.FontWeight.W_700, size=15,
+                     max_lines=2, overflow=ft.TextOverflow.ELLIPSIS),
+            ft.Text(_fmt(produto["preco"]), color="#FFFFFF", size=14, weight=ft.FontWeight.W_500, opacity=0.9),
+        ]
+        aviso_estoque = _aviso_estoque(produto)
+        if aviso_estoque:
+            conteudo.append(aviso_estoque)
         return ft.Container(
-            content=ft.Column(
-                [
-                    ft.Text(produto["nome"], color="#FFFFFF", weight=ft.FontWeight.W_700, size=15,
-                             max_lines=2, overflow=ft.TextOverflow.ELLIPSIS),
-                    ft.Text(_fmt(produto["preco"]), color="#FFFFFF", size=14, weight=ft.FontWeight.W_500, opacity=0.9),
-                ],
-                spacing=6,
-            ),
+            content=ft.Column(conteudo, spacing=6),
             bgcolor=produto["cor_hex"] or theme.BRASA,
             border_radius=theme.RADIUS,
             padding=14,
@@ -202,6 +247,12 @@ def tela(page: ft.Page, estado, ao_fechar_caixa, ao_deslogar, ao_abrir_configura
     banner_novidade.border_radius = theme.RADIUS
     banner_novidade.border = ft.border.all(1, theme.ALERTA)
 
+    # Atualizacao automatica NAO fica nesta tela de proposito: aqui e onde o
+    # evento esta rolando de verdade (vendas acontecendo). Baixar/instalar uma
+    # atualizacao fecha o app por alguns segundos - isso so e seguro no momento
+    # de abrir o app (tela de login, antes de comecar a vender), ver
+    # ui/screens/login.py.
+
     _polling_ativo = {"on": True}
 
     def _verificar_novidade_em_segundo_plano():
@@ -241,18 +292,214 @@ def tela(page: ft.Page, estado, ao_fechar_caixa, ao_deslogar, ao_abrir_configura
             componentes.aviso(page, "Carrinho vazio.", cor=theme.ALERTA)
             return
 
-        def escolher(codigo):
+        total = Decimal(str(estado.total_carrinho()))
+
+        def _criar_caixa_troco(tamanho=28):
+            """Caixa destacada (fundo + borda verde) pro troco - pedido do
+            usuario: o valor precisa "saltar aos olhos" pro operador, na
+            pressa do balcao, sem precisar procurar um texto pequeno."""
+            valor_texto = ft.Text("", size=tamanho, weight=ft.FontWeight.W_900, color=theme.SUCESSO)
+            caixa = ft.Container(
+                content=ft.Column(
+                    [ft.Text("TROCO", size=12, color=theme.TEXTO_SUAVE, weight=ft.FontWeight.W_700),
+                     valor_texto],
+                    spacing=0, horizontal_alignment=ft.CrossAxisAlignment.CENTER,
+                ),
+                visible=False, bgcolor=theme.SURFACE_ALTA, border=ft.border.all(2, theme.SUCESSO),
+                border_radius=theme.RADIUS, padding=ft.padding.symmetric(10, 16),
+                alignment=ft.alignment.center,
+            )
+            return caixa, valor_texto
+
+        # ---------- Modo rapido (padrao - um toque e pronto, como sempre foi) ----------
+
+        campo_pago_rapido = theme.campo_texto("Valor recebido (R$)", width=200)
+        caixa_troco_rapido, valor_troco_rapido = _criar_caixa_troco(tamanho=30)
+        texto_aviso_pago_rapido = ft.Text("", size=13, color=theme.ERRO, weight=ft.FontWeight.W_600)
+
+        def recalcular_troco_rapido(e=None):
+            try:
+                pago = _parse_moeda(campo_pago_rapido.value)
+            except ValueError:
+                caixa_troco_rapido.visible = False
+                texto_aviso_pago_rapido.value = ""
+                dlg.update()
+                return
+            troco = pago - total
+            if troco >= 0:
+                valor_troco_rapido.value = _fmt(troco)
+                caixa_troco_rapido.visible = True
+                texto_aviso_pago_rapido.value = ""
+            else:
+                caixa_troco_rapido.visible = False
+                texto_aviso_pago_rapido.value = "Valor recebido é menor que o total."
+            dlg.update()
+
+        campo_pago_rapido.on_change = recalcular_troco_rapido
+
+        def voltar_dinheiro_rapido(e=None):
+            painel_dinheiro_rapido.visible = False
+            modo_rapido.visible = True
+            dlg.update()
+
+        def confirmar_dinheiro_rapido(e):
+            try:
+                pago = _parse_moeda(campo_pago_rapido.value)
+            except ValueError:
+                componentes.aviso(page, "Informe o valor recebido.", cor=theme.ERRO)
+                return
+            if pago < total:
+                componentes.aviso(page, "Valor recebido é menor que o total.", cor=theme.ERRO)
+                return
+            componentes.fechar_dialogo(page, dlg)
+            finalizar([{"forma": "DINHEIRO", "valor": total}])
+
+        painel_dinheiro_rapido = ft.Container(
+            visible=False,
+            content=ft.Column(
+                [ft.Text(f"Total em dinheiro: {_fmt(total)}", color=theme.TEXTO, size=15, weight=ft.FontWeight.W_700),
+                 campo_pago_rapido, caixa_troco_rapido, texto_aviso_pago_rapido,
+                 ft.Row([ft.TextButton("Voltar", on_click=voltar_dinheiro_rapido),
+                         theme.botao_primario("Confirmar", on_click=confirmar_dinheiro_rapido)],
+                        alignment=ft.MainAxisAlignment.END)],
+                spacing=10, tight=True,
+            ),
+        )
+
+        def escolher_rapido(codigo, nome):
             def handler(e):
-                componentes.fechar_dialogo(page, dlg)
-                finalizar(codigo)
+                if codigo == "DINHEIRO":
+                    campo_pago_rapido.value = ""
+                    caixa_troco_rapido.visible = False
+                    texto_aviso_pago_rapido.value = ""
+                    modo_rapido.visible = False
+                    painel_dinheiro_rapido.visible = True
+                    dlg.update()
+                else:
+                    componentes.fechar_dialogo(page, dlg)
+                    finalizar([{"forma": codigo, "valor": total}])
             return handler
+
+        def abrir_modo_dividido(e):
+            modo_rapido.visible = False
+            painel_dividido.visible = True
+            dlg.update()
+
+        modo_rapido = ft.Column(
+            [theme.botao_primario(nome, on_click=escolher_rapido(codigo, nome), largura=280)
+             for codigo, nome in FORMAS_PAGAMENTO]
+            + [ft.Divider(color=theme.BORDA),
+               theme.botao_secundario("Várias formas", icone=ft.icons.CALL_SPLIT, on_click=abrir_modo_dividido, largura=280)],
+            spacing=8,
+        )
+
+        # ---------- Modo dividido (várias formas na mesma venda) ----------
+        # Um campo de valor por forma, todos visiveis de uma vez - digita o
+        # quanto vai em cada forma (o resto fica 0,00) e confirma uma vez so.
+
+        campos_valor_dividido = {
+            codigo: theme.campo_texto(nome, value="0,00", width=170)
+            for codigo, nome in FORMAS_PAGAMENTO
+        }
+        campo_pago_dividido = theme.campo_texto("Valor recebido em dinheiro (R$)", width=250, visible=False)
+        caixa_troco_dividido, valor_troco_dividido = _criar_caixa_troco(tamanho=22)
+        texto_aviso_dividido = ft.Text("", size=12, color=theme.ERRO, weight=ft.FontWeight.W_600)
+        texto_restante_dividido = ft.Text(f"Restante: {_fmt(total)}", color=theme.TEXTO_SUAVE, size=14, weight=ft.FontWeight.W_600)
+        btn_confirmar_dividido = theme.botao_primario("Confirmar pagamento", icone=ft.icons.CHECK, on_click=lambda e: confirmar_dividido(e))
+
+        def _valor_campo(campo) -> Decimal:
+            try:
+                return _parse_moeda(campo.value)
+            except ValueError:
+                return Decimal("0")
+
+        def recalcular_dividido(e=None):
+            soma = sum((_valor_campo(c) for c in campos_valor_dividido.values()), Decimal("0"))
+            restante = total - soma
+            valor_dinheiro = _valor_campo(campos_valor_dividido["DINHEIRO"])
+            campo_pago_dividido.visible = valor_dinheiro > 0
+            if campo_pago_dividido.visible:
+                pago = _valor_campo(campo_pago_dividido)
+                troco = pago - valor_dinheiro
+                if campo_pago_dividido.value.strip() in ("", "0,00"):
+                    caixa_troco_dividido.visible = False
+                    texto_aviso_dividido.value = ""
+                elif troco >= 0:
+                    valor_troco_dividido.value = _fmt(troco)
+                    caixa_troco_dividido.visible = True
+                    texto_aviso_dividido.value = ""
+                else:
+                    caixa_troco_dividido.visible = False
+                    texto_aviso_dividido.value = "Valor recebido é menor que o valor em dinheiro."
+            else:
+                caixa_troco_dividido.visible = False
+                texto_aviso_dividido.value = ""
+            if restante > 0:
+                texto_restante_dividido.value = f"Restante: {_fmt(restante)}"
+                texto_restante_dividido.color = theme.TEXTO_SUAVE
+            elif restante < 0:
+                texto_restante_dividido.value = f"Passou {_fmt(-restante)} do total."
+                texto_restante_dividido.color = theme.ERRO
+            else:
+                texto_restante_dividido.value = "Valores completam o total."
+                texto_restante_dividido.color = theme.SUCESSO
+            btn_confirmar_dividido.disabled = restante != 0
+            dlg.update()
+
+        for campo in campos_valor_dividido.values():
+            campo.on_change = recalcular_dividido
+        campo_pago_dividido.on_change = recalcular_dividido
+
+        def confirmar_dividido(e):
+            pagamentos_form = [
+                {"forma": codigo, "valor": _valor_campo(campo)}
+                for codigo, campo in campos_valor_dividido.items()
+                if _valor_campo(campo) > 0
+            ]
+            if not pagamentos_form:
+                componentes.aviso(page, "Informe o valor em pelo menos uma forma.", cor=theme.ALERTA)
+                return
+            soma = sum(p["valor"] for p in pagamentos_form)
+            if abs(soma - total) > Decimal("0.01"):
+                componentes.aviso(page, "Os valores não completam o total da venda.", cor=theme.ALERTA)
+                return
+            valor_dinheiro = _valor_campo(campos_valor_dividido["DINHEIRO"])
+            if valor_dinheiro > 0:
+                pago = _valor_campo(campo_pago_dividido)
+                if pago < valor_dinheiro:
+                    componentes.aviso(page, "Informe um valor recebido em dinheiro válido.", cor=theme.ERRO)
+                    return
+            componentes.fechar_dialogo(page, dlg)
+            finalizar(pagamentos_form)
+
+        def voltar_modo_rapido(e=None):
+            for campo in campos_valor_dividido.values():
+                campo.value = "0,00"
+            campo_pago_dividido.value = ""
+            painel_dividido.visible = False
+            modo_rapido.visible = True
+            dlg.update()
+
+        btn_confirmar_dividido.disabled = True
+        painel_dividido = ft.Container(
+            visible=False,
+            content=ft.Column(
+                [ft.TextButton("< Voltar", on_click=voltar_modo_rapido),
+                 theme.subtitulo("Digite o valor de cada forma usada - o restante some conforme completa."),
+                 *campos_valor_dividido.values(),
+                 campo_pago_dividido, caixa_troco_dividido, texto_aviso_dividido,
+                 ft.Divider(color=theme.BORDA),
+                 texto_restante_dividido, btn_confirmar_dividido],
+                spacing=10, tight=True, scroll=ft.ScrollMode.AUTO,
+            ),
+        )
 
         dlg = ft.AlertDialog(
             modal=True, bgcolor=theme.SURFACE,
-            title=ft.Text(f"Total: {_fmt(estado.total_carrinho())}", color=theme.TEXTO, size=20),
+            title=ft.Text(f"Total: {_fmt(total)}", color=theme.TEXTO, size=20),
             content=ft.Column(
-                [theme.botao_primario(nome, on_click=escolher(codigo), largura=280) for codigo, nome in FORMAS_PAGAMENTO],
-                tight=True, spacing=10,
+                [modo_rapido, painel_dinheiro_rapido, painel_dividido],
+                tight=True, spacing=10, scroll=ft.ScrollMode.AUTO, width=320, height=520,
             ),
             actions=[ft.TextButton("Cancelar", on_click=lambda e: componentes.fechar_dialogo(page, dlg))],
         )
@@ -260,27 +507,61 @@ def tela(page: ft.Page, estado, ao_fechar_caixa, ao_deslogar, ao_abrir_configura
         dlg.open = True
         page.update()
 
-    def finalizar(forma_codigo):
+    # Impressora Bluetooth 80mm usada pelos vendedores andando pela festa -
+    # ligada via app RawBT (ver db/modo_celular.py e memoria do projeto), que
+    # recebe os mesmos bytes ESC/POS num link "rawbt:base64,...". 576 pontos
+    # e a largura recomendada pra 80mm (a Elgin i9 do PC usa 58mm/384, esse
+    # padrao continua em LARGURA_PONTOS dentro de templates.py).
+    LARGURA_PONTOS_CELULAR = 576
+
+    def _imprimir_via_rawbt(dados: bytes):
+        dados_b64 = base64.b64encode(dados).decode("ascii")
+        page.launch_url(f"rawbt:base64,{dados_b64}")
+
+    def finalizar(pagamentos):
         if not estado.carrinho:
             componentes.aviso(page, "Carrinho vazio.", cor=theme.ALERTA)
             return
         itens = [dict(i) for i in estado.carrinho]
         try:
-            resultado = repository.registrar_venda(estado.sessao_id, estado.caixa_id, estado.operador_id, itens, forma_codigo)
+            resultado = repository.registrar_venda(
+                estado.sessao_id, estado.caixa_id, estado.operador_id, itens, pagamentos,
+            )
         except ConexaoIndisponivel:
             componentes.dialogo_erro_conexao(page, tentar_de_novo=None)
             return
+        except ValueError as ex:
+            # Estoque acabou de virar insuficiente (provavelmente outro caixa
+            # vendeu o resto entre o carrinho ser montado e confirmar o
+            # pagamento) - a venda inteira foi cancelada no banco, nada foi
+            # descontado. Mantem o carrinho como esta (o operador decide se
+            # remove o item ou tenta de novo) e atualiza a grade agora, na
+            # hora, pra esse caixa ja ver o estoque certo sem precisar clicar
+            # em "Atualizar".
+            componentes.aviso(page, str(ex), cor=theme.ERRO)
+            recarregar_dados()
+            return
+
+        qtd_pedidos_caixa["valor"] += 1
+        texto_qtd_pedidos.value = f"{qtd_pedidos_caixa['valor']} pedido(s) feito(s) neste caixa"
+        texto_qtd_pedidos.update()
 
         try:
+            itens_impressao = repository.expandir_itens_para_impressao(itens)
             dados = templates.fichas_venda_bytes(
                 nome_evento=evento["nome"],
                 numero_pedido=resultado["numero_pedido"],
                 data_hora=datetime.now().strftime("%d/%m/%Y %H:%M:%S"),
-                itens=itens,
+                itens=itens_impressao,
                 operador_nome=estado.operador_nome,
                 caixa_nome=estado.caixa_nome,
+                largura_pontos=LARGURA_PONTOS_CELULAR if page.web else templates.LARGURA_PONTOS,
+                cortador_automatico=not page.web,
             )
-            escpos_printer.imprimir(cfg_local["impressora_windows"], dados)
+            if page.web:
+                _imprimir_via_rawbt(dados)
+            else:
+                escpos_printer.imprimir(cfg_local["impressora_windows"], dados)
         except Exception as ex:
             componentes.aviso(
                 page,
@@ -289,7 +570,7 @@ def tela(page: ft.Page, estado, ao_fechar_caixa, ao_deslogar, ao_abrir_configura
                 cor=theme.ALERTA,
             )
         else:
-            total_fichas = sum(i["quantidade"] for i in itens)
+            total_fichas = sum(i["quantidade"] for i in itens_impressao)
             componentes.aviso(page, f"Pedido #{resultado['numero_pedido']}: {total_fichas} ficha(s) impressa(s)!")
 
         estado.limpar_carrinho()
@@ -305,15 +586,21 @@ def tela(page: ft.Page, estado, ao_fechar_caixa, ao_deslogar, ao_abrir_configura
             return
         venda_info = detalhes["venda"]
         try:
+            itens_impressao = repository.expandir_itens_para_impressao(detalhes["itens"])
             dados = templates.fichas_venda_bytes(
                 nome_evento=evento["nome"],
                 numero_pedido=venda_info["numero_pedido"],
                 data_hora=venda_info["criado_em"].strftime("%d/%m/%Y %H:%M:%S"),
-                itens=detalhes["itens"],
+                itens=itens_impressao,
                 operador_nome=venda_info["operador_nome"],
                 caixa_nome=venda_info["caixa_nome"],
+                largura_pontos=LARGURA_PONTOS_CELULAR if page.web else templates.LARGURA_PONTOS,
+                cortador_automatico=not page.web,
             )
-            escpos_printer.imprimir(cfg_local["impressora_windows"], dados)
+            if page.web:
+                _imprimir_via_rawbt(dados)
+            else:
+                escpos_printer.imprimir(cfg_local["impressora_windows"], dados)
         except Exception as ex:
             componentes.aviso(page, f"Não deu para reimprimir: {ex}", cor=theme.ERRO)
             return
@@ -377,7 +664,8 @@ def tela(page: ft.Page, estado, ao_fechar_caixa, ao_deslogar, ao_abrir_configura
                             [
                                 ft.Text(f"Pedido #{v['numero_pedido']} · {_fmt(v['valor_total'])}",
                                         color=theme.TEXTO, weight=ft.FontWeight.W_600, size=14),
-                                ft.Text(f"{v['criado_em'].strftime('%H:%M:%S')} · {v['forma_pagamento']} · {texto_status}",
+                                ft.Text(f"{v['criado_em'].strftime('%H:%M:%S')} · "
+                                        f"{NOME_FORMA_PAGAMENTO.get(v['forma_pagamento'], v['forma_pagamento'])} · {texto_status}",
                                         color=cor_status, size=12),
                             ],
                             expand=True, spacing=2,
@@ -554,60 +842,84 @@ def tela(page: ft.Page, estado, ao_fechar_caixa, ao_deslogar, ao_abrir_configura
 
     # ---------- Layout ----------
 
-    texto_nome_evento = ft.Text(evento["nome"], color=theme.TEXTO, size=16, weight=ft.FontWeight.W_700)
+    texto_nome_evento = ft.Text(evento["nome"], color=theme.TEXTO, size=16, weight=ft.FontWeight.W_700,
+                                  max_lines=1, overflow=ft.TextOverflow.ELLIPSIS)
+    texto_caixa_operador = ft.Text(f"{estado.caixa_nome} · {estado.operador_nome}", color=theme.TEXTO_SUAVE, size=12,
+                                     max_lines=1, overflow=ft.TextOverflow.ELLIPSIS)
+
+    # No PC (tela larga) os botoes de acao ficam todos visiveis, como sempre
+    # foi. So no celular (tela estreita) eles somem e entram num menu "..." -
+    # nao cabe uma fileira de 7 botoes de texto numa tela de celular.
+    LARGURA_QUEBRA = 760
+
+    menu_acoes = ft.PopupMenuButton(
+        icon=ft.icons.MORE_VERT,
+        icon_color=theme.TEXTO_SUAVE,
+        visible=False,
+        items=[
+            ft.PopupMenuItem(text="Sangria", icon=ft.icons.ARROW_DOWNWARD,
+                              on_click=lambda e: abrir_dialogo_movimento("Sangria", "SANGRIA")),
+            ft.PopupMenuItem(text="Reforço", icon=ft.icons.ARROW_UPWARD,
+                              on_click=lambda e: abrir_dialogo_movimento("Reforço", "REFORCO")),
+            ft.PopupMenuItem(text="Troca", icon=ft.icons.SWAP_HORIZ, on_click=abrir_dialogo_troca),
+            ft.PopupMenuItem(text="Churrasco", icon=ft.icons.OUTDOOR_GRILL,
+                              on_click=lambda e: _parar_polling_e_chamar(ao_abrir_churrasco)()),
+            ft.PopupMenuItem(text="Vendas recentes", icon=ft.icons.RECEIPT_LONG, on_click=abrir_dialogo_vendas_recentes),
+            ft.PopupMenuItem(text="Relatórios", icon=ft.icons.BAR_CHART,
+                              on_click=lambda e: _parar_polling_e_chamar(ao_abrir_relatorios)()),
+            ft.PopupMenuItem(text="Configurações", icon=ft.icons.SETTINGS,
+                              on_click=lambda e: _parar_polling_e_chamar(ao_abrir_configuracao)()),
+            ft.PopupMenuItem(text="Trocar operador", icon=ft.icons.LOGOUT,
+                              on_click=lambda e: _parar_polling_e_chamar(ao_deslogar)()),
+        ],
+    )
+
+    botoes_completos = ft.Row(
+        [
+            theme.botao_secundario("Sangria", icone=ft.icons.ARROW_DOWNWARD,
+                                    on_click=lambda e: abrir_dialogo_movimento("Sangria", "SANGRIA")),
+            theme.botao_secundario("Reforço", icone=ft.icons.ARROW_UPWARD,
+                                    on_click=lambda e: abrir_dialogo_movimento("Reforço", "REFORCO")),
+            theme.botao_secundario("Troca", icone=ft.icons.SWAP_HORIZ, on_click=abrir_dialogo_troca),
+            theme.botao_secundario("Churrasco", icone=ft.icons.OUTDOOR_GRILL,
+                                    on_click=lambda e: _parar_polling_e_chamar(ao_abrir_churrasco)()),
+            theme.botao_secundario("Vendas recentes", icone=ft.icons.RECEIPT_LONG, on_click=abrir_dialogo_vendas_recentes),
+            theme.botao_secundario("Relatórios", icone=ft.icons.BAR_CHART,
+                                    on_click=lambda e: _parar_polling_e_chamar(ao_abrir_relatorios)()),
+            theme.botao_secundario("Configurações", icone=ft.icons.SETTINGS,
+                                    on_click=lambda e: _parar_polling_e_chamar(ao_abrir_configuracao)()),
+            theme.botao_secundario("Trocar operador", icone=ft.icons.LOGOUT,
+                                    on_click=lambda e: _parar_polling_e_chamar(ao_deslogar)()),
+        ],
+        spacing=6,
+        visible=True,
+    )
 
     barra_topo = ft.Container(
         content=ft.Row(
             [
                 ft.Row(
-                    [ft.Image(src="logo_adk.png", height=28, fit=ft.ImageFit.CONTAIN), texto_nome_evento],
-                    spacing=8,
-                ),
-                ft.Column(
                     [
-                        ft.Text(f"{estado.caixa_nome} · {estado.operador_nome}", color=theme.TEXTO_SUAVE, size=13),
-                    ]
-                    + (
-                        [ft.Text(f"IP deste PC (principal): {cfg_local['postgres']['host']}",
-                                  color=theme.TEXTO_FRACO, size=10)]
-                        if cfg_local.get("papel_rede") == "servidor" else []
-                    ),
-                    spacing=0,
+                        ft.Image(src="logo_adk.png", height=26, fit=ft.ImageFit.CONTAIN),
+                        ft.Column([texto_nome_evento, texto_caixa_operador], spacing=0),
+                    ],
+                    spacing=8, expand=True,
                 ),
                 ft.Row(
                     [
                         ft.IconButton(ft.icons.REFRESH, icon_color=theme.TEXTO_SUAVE, tooltip="Atualizar produtos/evento",
                                       on_click=recarregar_dados),
-                        ft.TextButton("Sangria", icon=ft.icons.ARROW_DOWNWARD,
-                                      on_click=lambda e: abrir_dialogo_movimento("Sangria", "SANGRIA"),
-                                      style=ft.ButtonStyle(color=theme.TEXTO_SUAVE)),
-                        ft.TextButton("Reforço", icon=ft.icons.ARROW_UPWARD,
-                                      on_click=lambda e: abrir_dialogo_movimento("Reforço", "REFORCO"),
-                                      style=ft.ButtonStyle(color=theme.TEXTO_SUAVE)),
-                        ft.TextButton("Troca", icon=ft.icons.SWAP_HORIZ,
-                                      on_click=abrir_dialogo_troca,
-                                      style=ft.ButtonStyle(color=theme.TEXTO_SUAVE)),
-                        ft.TextButton("Vendas recentes", icon=ft.icons.RECEIPT_LONG,
-                                      on_click=abrir_dialogo_vendas_recentes,
-                                      style=ft.ButtonStyle(color=theme.TEXTO_SUAVE)),
-                        ft.TextButton("Relatórios", icon=ft.icons.BAR_CHART,
-                                      on_click=lambda e: _parar_polling_e_chamar(ao_abrir_relatorios)(),
-                                      style=ft.ButtonStyle(color=theme.TEXTO_SUAVE)),
-                        ft.TextButton("Configurações", icon=ft.icons.SETTINGS,
-                                      on_click=lambda e: _parar_polling_e_chamar(ao_abrir_configuracao)(),
-                                      style=ft.ButtonStyle(color=theme.TEXTO_SUAVE)),
-                        ft.TextButton("Trocar operador", icon=ft.icons.LOGOUT,
-                                      on_click=lambda e: _parar_polling_e_chamar(ao_deslogar)(),
-                                      style=ft.ButtonStyle(color=theme.TEXTO_SUAVE)),
+                        botoes_completos,
+                        menu_acoes,
                         theme.botao_secundario("Fechar caixa", icone=ft.icons.POINT_OF_SALE,
                                                 on_click=lambda e: _parar_polling_e_chamar(ao_fechar_caixa)()),
                     ],
-                    spacing=4,
+                    spacing=6,
                 ),
             ],
             alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
         ),
-        padding=ft.padding.symmetric(10, 20),
+        padding=ft.padding.symmetric(8, 16),
         bgcolor=theme.SURFACE,
         border=ft.border.only(bottom=ft.BorderSide(1, theme.BORDA)),
     )
@@ -615,6 +927,7 @@ def tela(page: ft.Page, estado, ao_fechar_caixa, ao_deslogar, ao_abrir_configura
     painel_carrinho = ft.Container(
         content=ft.Column(
             [
+                texto_qtd_pedidos,
                 ft.Text("Pedido atual", color=theme.TEXTO, size=16, weight=ft.FontWeight.W_700),
                 carrinho_coluna,
                 ft.Divider(color=theme.BORDA),
@@ -630,26 +943,46 @@ def tela(page: ft.Page, estado, ao_fechar_caixa, ao_deslogar, ao_abrir_configura
         border=ft.border.only(left=ft.BorderSide(1, theme.BORDA)),
     )
 
-    atualizar_grade()
-
-    return ft.Column(
+    area_produtos = ft.Stack(
         [
-            barra_topo,
-            ft.Row(
-                [
-                    ft.Container(
-                        content=ft.Column([banner_novidade, chips_categorias, grade_produtos], spacing=14, expand=True),
-                        padding=18, expand=True,
-                    ),
-                    painel_carrinho,
-                ],
-                expand=True,
-                spacing=0,
+            ft.Container(
+                content=ft.Image(src="logo_adk.png", width=360, fit=ft.ImageFit.CONTAIN, opacity=0.05),
+                alignment=ft.alignment.center, expand=True,
+            ),
+            ft.Container(
+                content=ft.Column([banner_novidade, chips_categorias, grade_produtos], spacing=14, expand=True),
+                padding=18, expand=True,
             ),
         ],
-        spacing=0,
         expand=True,
     )
+
+    corpo = ft.Container(expand=True)
+
+    def _montar_corpo(largo):
+        painel_carrinho.width = 340 if largo else None
+        if largo:
+            return ft.Row([area_produtos, painel_carrinho], expand=True, spacing=0)
+        return ft.Column([area_produtos, painel_carrinho], expand=True, spacing=0, scroll=ft.ScrollMode.AUTO)
+
+    # Em tela larga (PC) produtos e carrinho ficam lado a lado, com o
+    # carrinho numa largura fixa (340px) - nunca ocupando 1/3 da tela num
+    # monitor grande. Em tela estreita (celular) cada um ocupa a largura
+    # toda e empilha.
+    def _ajustar_layout(e=None):
+        largo = (page.width or 1000) >= LARGURA_QUEBRA
+        botoes_completos.visible = largo
+        menu_acoes.visible = not largo
+        corpo.content = _montar_corpo(largo)
+        page.update()
+
+    page.on_resized = _ajustar_layout
+    _ajustar_layout()
+
+    atualizar_grade()
+    atualizar_carrinho_ui()
+
+    return ft.Column([barra_topo, corpo], spacing=0, expand=True)
 
 
 def _fmt(valor) -> str:

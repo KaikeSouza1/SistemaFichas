@@ -28,7 +28,7 @@ def liberar_firewall() -> bool:
     try:
         verificar = subprocess.run(
             ["netsh", "advfirewall", "firewall", "show", "rule", f"name={_NOME_REGRA_FIREWALL}"],
-            capture_output=True, text=True, timeout=10,
+            capture_output=True, text=True, timeout=10, creationflags=subprocess.CREATE_NO_WINDOW,
         )
         if verificar.returncode == 0 and "No rules match" not in verificar.stdout:
             return True
@@ -36,7 +36,7 @@ def liberar_firewall() -> bool:
             ["netsh", "advfirewall", "firewall", "add", "rule",
              f"name={_NOME_REGRA_FIREWALL}", "dir=in", "action=allow",
              "protocol=UDP", f"localport={PORTA_DESCOBERTA}"],
-            capture_output=True, text=True, timeout=10,
+            capture_output=True, text=True, timeout=10, creationflags=subprocess.CREATE_NO_WINDOW,
         )
         return resultado.returncode == 0
     except Exception:
