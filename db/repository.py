@@ -131,6 +131,16 @@ def garantir_coluna_administrador_operador() -> None:
         )
 
 
+def garantir_coluna_evento_operador() -> None:
+    """Migracao pra bancos que ja existiam antes de operadores comuns
+    resetarem por evento (2026-08-19) - so adiciona a coluna se nao existir.
+    Linhas ja existentes ficam com evento_id NULL (tratadas como "sempre
+    visiveis" - ver listar_operadores_disponiveis_para_login), pra nao
+    remover ninguem da lista de login so por causa da migracao."""
+    with conectar() as conn, conn.cursor() as cur:
+        cur.execute("ALTER TABLE operadores ADD COLUMN IF NOT EXISTS evento_id INTEGER REFERENCES eventos(id)")
+
+
 def garantir_admin_padrao() -> None:
     """O operador seed antigo (antes de existir a coluna administrador) tinha
     PIN '0000' e nao virava administrador automaticamente. Atualiza esse
@@ -314,6 +324,11 @@ def garantir_blocos_numeracao_churrasco() -> None:
 
 
 def listar_operadores(somente_ativos=True):
+    """Lista TODOS os operadores (qualquer evento, inclusive de eventos ja
+    fechados) - usada em Configuracoes > Operadores, onde o administrador
+    gerencia/reativa o cadastro completo. Pro seletor de LOGIN (onde
+    operador comum de evento fechado nao deveria aparecer/autenticar mais),
+    ver listar_operadores_disponiveis_para_login()."""
     with conectar() as conn, conn.cursor() as cur:
         if somente_ativos:
             cur.execute("SELECT id, nome, administrador FROM operadores WHERE ativo ORDER BY nome")
@@ -322,11 +337,39 @@ def listar_operadores(somente_ativos=True):
         return cur.fetchall()
 
 
-def criar_operador(nome, pin, administrador=False):
+def listar_operadores_disponiveis_para_login():
+    """Pedido explicito do usuario (2026-08-19, audio): operador comum
+    "reseta" por evento - some do seletor de login quando o evento em que
+    foi cadastrado fecha e outro evento abre (nao precisa mais desativar
+    manualmente um por um a cada festa nova). Administrador e SEMPRE global/
+    fixo (nunca some). evento_id NULL tambem sempre aparece - e o estado de
+    quem ja existia antes dessa coluna existir (ver
+    garantir_coluna_evento_operador), pra nao "sumir" cadastro de ninguem
+    so por causa da migracao."""
     with conectar() as conn, conn.cursor() as cur:
         cur.execute(
-            "INSERT INTO operadores (nome, pin, administrador) VALUES (%s, %s, %s) RETURNING id",
-            (nome, pin, administrador),
+            """SELECT o.id, o.nome, o.administrador FROM operadores o
+               WHERE o.ativo AND (o.administrador OR o.evento_id IS NULL
+                   OR o.evento_id = (SELECT id FROM eventos WHERE status = 'ABERTA'))
+               ORDER BY o.nome"""
+        )
+        return cur.fetchall()
+
+
+def criar_operador(nome, pin, administrador=False):
+    """Administrador fica sempre com evento_id NULL (global/fixo). Operador
+    comum fica vinculado ao evento ATUALMENTE aberto (se houver algum) - e
+    isso que faz ele "sumir" do login quando esse evento fechar e outro
+    abrir, ate ser reativado (ver definir_ativo_operador)."""
+    with conectar() as conn, conn.cursor() as cur:
+        evento_id = None
+        if not administrador:
+            cur.execute("SELECT id FROM eventos WHERE status = 'ABERTA'")
+            evento_aberto = cur.fetchone()
+            evento_id = evento_aberto["id"] if evento_aberto else None
+        cur.execute(
+            "INSERT INTO operadores (nome, pin, administrador, evento_id) VALUES (%s, %s, %s, %s) RETURNING id",
+            (nome, pin, administrador, evento_id),
         )
         return cur.fetchone()["id"]
 
@@ -334,6 +377,18 @@ def criar_operador(nome, pin, administrador=False):
 def definir_ativo_operador(operador_id, ativo):
     with conectar() as conn, conn.cursor() as cur:
         cur.execute("UPDATE operadores SET ativo = %s WHERE id = %s", (ativo, operador_id))
+        if ativo:
+            # Reativar um operador comum (nao administrador) o "migra" pro
+            # evento atualmente aberto - pedido do usuario (2026-08-19): sem
+            # isso, reativar um operador de um evento antigo nao adiantaria
+            # nada (ele continuaria escondido do login por pertencer a um
+            # evento ja fechado). Administrador nunca e afetado (WHERE NOT
+            # administrador) - continua global/fixo sempre.
+            cur.execute(
+                """UPDATE operadores SET evento_id = (SELECT id FROM eventos WHERE status = 'ABERTA')
+                   WHERE id = %s AND NOT administrador""",
+                (operador_id,),
+            )
 
 
 # ---------- Caixas ----------

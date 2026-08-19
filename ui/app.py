@@ -89,6 +89,7 @@ def main(page: ft.Page):
             repository.garantir_pagamentos_venda()
             repository.garantir_coluna_administrador_operador()
             repository.garantir_admin_padrao()
+            repository.garantir_coluna_evento_operador()
             repository.garantir_schema_churrasco()
             repository.garantir_coluna_pagamento_churrasco()
             repository.garantir_tabela_faixas_numeracao_churrasco()
@@ -182,7 +183,15 @@ def main(page: ft.Page):
             ir_para_abertura()
 
     def ir_para_abertura():
-        mostrar(lambda: abertura_caixa.tela(page, estado, ao_abrir=ir_para_venda, ao_tentar_de_novo=ir_para_abertura))
+        mostrar(lambda: abertura_caixa.tela(
+            page, estado, ao_abrir=ir_para_venda, ao_tentar_de_novo=ir_para_abertura,
+            ao_abrir_configuracao=lambda: mostrar(
+                lambda: configuracao.tela(
+                    page, ao_salvar_conexao=verificar_inicio, ao_voltar=ir_para_abertura,
+                    administrador=estado.operador_administrador,
+                )
+            ),
+        ))
 
     def ir_para_venda():
         # Reconfirma que ainda existe um evento aberto antes de montar a tela

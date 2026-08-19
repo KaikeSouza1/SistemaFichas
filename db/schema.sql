@@ -81,6 +81,19 @@ CREATE TABLE eventos (
 -- So pode existir um evento aberto por vez em todo o sistema.
 CREATE UNIQUE INDEX um_evento_aberto ON eventos (status) WHERE status = 'ABERTA';
 
+-- Administrador e global/fixo (evento_id sempre NULL, nunca muda - visto em
+-- todo evento). Operador comum criado a partir de agora fica vinculado ao
+-- evento em que foi cadastrado - some da lista/login quando esse evento
+-- fecha e um outro abre (pedido explicito do usuario, 2026-08-19: "resetar"
+-- operadores por evento), mas continua no banco pra ser reativado depois
+-- (ver definir_ativo_operador em db/repository.py, que reatribui o
+-- evento_id pro evento atual ao reativar). evento_id NULL num operador
+-- comum tambem e permitido de proposito - e o estado de quem ja existia
+-- antes dessa coluna existir (instalacoes antigas, ver
+-- garantir_coluna_evento_operador) - continuam SEMPRE visiveis, pra nao
+-- "sumir" cadastro de ninguem sem aviso so por causa da migracao.
+ALTER TABLE operadores ADD COLUMN evento_id INTEGER REFERENCES eventos(id);
+
 CREATE TABLE sessoes_caixa (
     id SERIAL PRIMARY KEY,
     evento_id INTEGER NOT NULL REFERENCES eventos(id),

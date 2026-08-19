@@ -9,7 +9,7 @@ from ui import componentes, theme
 
 def tela(page: ft.Page, estado, ao_autenticar, ao_tentar_de_novo, ao_abrir_configuracao) -> ft.Control:
     try:
-        operadores = repository.listar_operadores()
+        operadores = repository.listar_operadores_disponiveis_para_login()
     except ConexaoIndisponivel:
         return componentes.tela_estado_erro(
             "Não deu para carregar a lista de operadores.", ao_tentar_de_novo
