@@ -465,3 +465,58 @@ def relatorio_ranking_bytes(titulo: str, linhas: list[dict], campo_nome: str, ca
     _linha(p)
     p.cut()
     return p.output
+
+
+def relatorio_churrasco_bytes(nome_evento: str, fichas: list[dict], por_churrasqueira: list[dict]) -> bytes:
+    """Relatorio final do churrasco (pedido do usuario, 2026-09: substitui o
+    ranking "por carne" separado) - uma unica impressao com: 1) lista achatada
+    de TODAS as fichas pagas (numero + carne + valor, sem agrupar/selecionar
+    carne nenhuma) com total de quantidade e valor no fim; 2) resumo por
+    churrasqueira (cor) logo em seguida, na MESMA impressao - antes isso
+    dependia de um botao separado que o usuario as vezes nao via imprimir."""
+    p = Dummy()
+    p.hw("INIT")
+
+    p.set(align="center", bold=True)
+    _linha(p, "RELATORIO DO CHURRASCO")
+    p.set(bold=False)
+    _linha(p, nome_evento.upper()[:LARGURA_COLUNAS])
+    _linha(p, _separador())
+
+    p.set(align="left", bold=True)
+    _linha(p, "Nº   CARNE                    VALOR")
+    p.set(bold=False)
+    total_qtd = 0
+    total_valor = Decimal("0")
+    for f in fichas:
+        numero = f"{f['numero_ficha']:<4}"[:4]
+        carne = f"{str(f['nome_carne']):<20}"[:20]
+        valor = f"{_moeda(f['valor']):>10}"
+        _linha(p, f"{numero} {carne} {valor}")
+        total_qtd += 1
+        total_valor += Decimal(str(f["valor"]))
+
+    if not fichas:
+        _linha(p, "Nenhuma ficha paga.")
+
+    _linha(p, _separador())
+    p.set(bold=True)
+    _linha(p, _duas_colunas(f"TOTAL: {total_qtd} ficha(s)", _moeda(total_valor)))
+    p.set(bold=False)
+    _linha(p)
+
+    p.set(align="center", bold=True)
+    _linha(p, "POR CHURRASQUEIRA")
+    p.set(align="left", bold=False)
+    _linha(p, _separador())
+    for linha in por_churrasqueira:
+        nome = f"{str(linha['nome_churrasqueira'] or linha['cor_hex']):<20}"[:20]
+        qtd = f"{linha['qtd']:>5}"
+        total = f"{_moeda(linha['total']):>10}"
+        _linha(p, f"{nome} {qtd} {total}")
+    if not por_churrasqueira:
+        _linha(p, "Sem dados.")
+
+    _linha(p)
+    p.cut()
+    return p.output

@@ -29,6 +29,25 @@ def main(page: ft.Page):
     theme.aplicar(page)
     estado = EstadoApp()
     _sync_iniciado = [False]
+    _backup_iniciado = [False]
+
+    def _iniciar_backup_periodico() -> None:
+        """Pedido real do usuario (2026-09): app travou/precisou reabrir e o
+        caixa "zerou". pg_dump periodico (papel_rede='servidor', banco local
+        embutido) pra sempre ter um checkpoint recente restauravel na mao,
+        independente do datadir do Postgres em si ter corrompido."""
+        import threading
+        import time
+
+        def loop():
+            while True:
+                time.sleep(300)
+                try:
+                    postgres_local.fazer_backup()
+                except Exception:
+                    pass
+
+        threading.Thread(target=loop, daemon=True, name="backup-periodico").start()
 
     def mostrar(builder):
         # Monta o novo conteudo ANTES de limpar a tela atual: se o builder
@@ -90,6 +109,8 @@ def main(page: ft.Page):
             repository.garantir_coluna_administrador_operador()
             repository.garantir_admin_padrao()
             repository.garantir_coluna_evento_operador()
+            repository.garantir_coluna_emitir_ficha_produto()
+            repository.garantir_colunas_nome_churrasqueira()
             repository.garantir_schema_churrasco()
             repository.garantir_coluna_pagamento_churrasco()
             repository.garantir_tabela_faixas_numeracao_churrasco()
@@ -98,6 +119,9 @@ def main(page: ft.Page):
             if not _sync_iniciado[0]:
                 sync.iniciar_em_background()
                 _sync_iniciado[0] = True
+            if cfg.get("papel_rede") == "servidor" and not _backup_iniciado[0]:
+                _iniciar_backup_periodico()
+                _backup_iniciado[0] = True
             if cfg.get("papel_rede") == "servidor":
                 descoberta.iniciar_responder_em_background(descoberta.informacoes_deste_servidor)
         except ConexaoIndisponivel:
@@ -221,6 +245,10 @@ def main(page: ft.Page):
                 )
             ),
             ao_abrir_relatorios=lambda: mostrar(lambda: relatorios.tela(page, ao_voltar=ir_para_venda)),
+            ao_abrir_relatorio_gerencial=lambda: mostrar(lambda: fechamento.tela(
+                page, estado, ao_concluir=ir_para_venda, ao_tentar_de_novo=ir_para_venda,
+                ao_voltar=ir_para_venda, somente_consulta=True,
+            )),
             ao_abrir_churrasco=lambda: mostrar(lambda: churrasco.tela(page, estado, ao_voltar=ir_para_venda)),
             ao_tentar_de_novo=ir_para_venda,
         ))

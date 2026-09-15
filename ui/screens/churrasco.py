@@ -50,6 +50,13 @@ def _nome_cor(cor_hex: str) -> str:
     return _NOME_COR.get(cor_hex, cor_hex)
 
 
+def _rotulo_churrasqueira(nome: str | None, cor_hex: str) -> str:
+    """Nome livre da churrasqueira (pedido do usuario apos o 1o evento: nao
+    ficar preso a lista fixa de cores) - vazio cai no nome antigo derivado
+    da cor, pra faixas/fichas salvas antes disso existir."""
+    return nome or _nome_cor(cor_hex)
+
+
 def _fmt(valor) -> str:
     return f"R$ {valor:,.2f}".replace(",", "@").replace(".", ",").replace("@", ".")
 
@@ -127,7 +134,7 @@ def tela(page: ft.Page, estado, ao_voltar) -> ft.Control:
             content=ft.Column(
                 [
                     ft.Container(width=96, height=7, bgcolor=b["cor_hex"], border_radius=4),
-                    ft.Text(_nome_cor(b["cor_hex"]), color=theme.TEXTO, size=15, weight=ft.FontWeight.W_800),
+                    ft.Text(_rotulo_churrasqueira(b.get("nome"), b["cor_hex"]), color=theme.TEXTO, size=15, weight=ft.FontWeight.W_800),
                     ft.Text(f"Faixa: {b['numero_inicio']}-{b['numero_fim']}", color=theme.TEXTO_SUAVE, size=12),
                     (ft.Text("ESGOTADO", color=theme.ERRO, size=13, weight=ft.FontWeight.W_800) if b["esgotado"] else
                      ft.Text(f"Próxima: Nº {b['proximo_numero']}",
@@ -172,7 +179,7 @@ def tela(page: ft.Page, estado, ao_voltar) -> ft.Control:
                     [
                         ft.Container(width=96, height=7, bgcolor=t["cor_hex"], border_radius=4),
                         ft.Text(f"{t['qtd']} ficha(s)", color=theme.TEXTO, size=16, weight=ft.FontWeight.W_700),
-                        ft.Text(_nome_cor(t["cor_hex"]), color=theme.TEXTO_SUAVE, size=12),
+                        ft.Text(_rotulo_churrasqueira(t.get("nome_churrasqueira"), t["cor_hex"]), color=theme.TEXTO_SUAVE, size=12),
                         ft.Text(f"R$ {t['total']:.2f}".replace(".", ","), color=theme.TEXTO_SUAVE, size=13, weight=ft.FontWeight.W_600),
                     ],
                     spacing=6, horizontal_alignment=ft.CrossAxisAlignment.CENTER,
@@ -205,13 +212,18 @@ def tela(page: ft.Page, estado, ao_voltar) -> ft.Control:
         coluna_linhas = ft.Column(spacing=8)
         linhas_estado = []
 
-        def _nova_linha_estado(numero_inicio="", numero_fim="", cor_hex=None):
+        def _nova_linha_estado(numero_inicio="", numero_fim="", cor_hex=None, nome=""):
+            # Pedido do usuario apos o 1o evento: nome da churrasqueira deixa
+            # de ser preso a lista fixa (CORES_PRESET so continua servindo
+            # pra escolher a COR do botao/ficha, visual) - o rotulo agora e
+            # texto livre, pode ficar vazio (cai no nome derivado da cor).
             return {
                 "inicio": theme.campo_texto("Nº inicial", value=str(numero_inicio), width=110),
                 "fim": theme.campo_texto("Nº final", value=str(numero_fim), width=110),
+                "nome": theme.campo_texto("Nome da churrasqueira (opcional)", value=nome, width=220),
                 "cor": ft.Dropdown(
-                    label="Churrasqueira", width=190, value=cor_hex or CORES_PRESET[0][1],
-                    options=[ft.dropdown.Option(hexv, nome) for nome, hexv in CORES_PRESET],
+                    label="Cor", width=140, value=cor_hex or CORES_PRESET[0][1],
+                    options=[ft.dropdown.Option(hexv, nome_preset) for nome_preset, hexv in CORES_PRESET],
                     border_color=theme.BORDA, focused_border_color=theme.BRASA, bgcolor=theme.SURFACE_ALTA,
                 ),
             }
@@ -223,10 +235,11 @@ def tela(page: ft.Page, estado, ao_voltar) -> ft.Control:
                     redesenhar_linhas()
 
                 return ft.Row(
-                    [linha["inicio"], ft.Text("até", color=theme.TEXTO_SUAVE), linha["fim"], linha["cor"],
+                    [linha["inicio"], ft.Text("até", color=theme.TEXTO_SUAVE), linha["fim"],
+                     linha["nome"], linha["cor"],
                      ft.IconButton(ft.icons.DELETE_OUTLINE, icon_color=theme.ERRO, icon_size=18,
                                    tooltip="Remover faixa", on_click=remover)],
-                    spacing=8,
+                    spacing=8, wrap=True,
                 )
 
             coluna_linhas.controls = [_linha(l) for l in linhas_estado] or [
@@ -246,7 +259,7 @@ def tela(page: ft.Page, estado, ao_voltar) -> ft.Control:
             redesenhar_linhas()
 
         for f in faixas_salvas:
-            linhas_estado.append(_nova_linha_estado(f["numero_inicio"], f["numero_fim"], f["cor_hex"]))
+            linhas_estado.append(_nova_linha_estado(f["numero_inicio"], f["numero_fim"], f["cor_hex"], f.get("nome", "")))
         redesenhar_linhas(atualizar_pagina=False)
 
         def salvar_faixas(ev=None):
@@ -258,7 +271,7 @@ def tela(page: ft.Page, estado, ao_voltar) -> ft.Control:
                 except ValueError:
                     componentes.aviso(page, "Preencha o número inicial e final de cada faixa.", cor=theme.ERRO)
                     return
-                faixas.append((inicio, fim, linha["cor"].value))
+                faixas.append((inicio, fim, linha["cor"].value, linha["nome"].value.strip()))
             try:
                 repository.definir_faixas_numeracao_churrasco(evento["id"], faixas)
             except ValueError as ex:
@@ -310,7 +323,7 @@ def tela(page: ft.Page, estado, ao_voltar) -> ft.Control:
 
         texto_bloco_atual = ft.Row(
             [ft.Container(width=14, height=14, bgcolor=bloco["cor_hex"], border_radius=4),
-             ft.Text(f"Bloco {_nome_cor(bloco['cor_hex'])} — próxima ficha Nº {bloco['proximo_numero']}",
+             ft.Text(f"Bloco {_rotulo_churrasqueira(bloco.get('nome'), bloco['cor_hex'])} — próxima ficha Nº {bloco['proximo_numero']}",
                      color=theme.TEXTO_SUAVE, size=12, weight=ft.FontWeight.W_600)],
             spacing=8,
         )
@@ -351,7 +364,7 @@ def tela(page: ft.Page, estado, ao_voltar) -> ft.Control:
                     nome_carne=ficha["nome_carne"], nome_cliente=ficha["nome_cliente"],
                     valor=ficha["valor"], data_hora=datetime.now().strftime("%d/%m/%Y %H:%M:%S"),
                     operador_nome=estado.operador_nome, caixa_nome=estado.caixa_nome,
-                    nome_churrasqueira=_nome_cor(ficha["cor_hex"]),
+                    nome_churrasqueira=_rotulo_churrasqueira(ficha.get("nome_churrasqueira"), ficha["cor_hex"]),
                     largura_pontos=LARGURA_PONTOS_CELULAR if page.web else templates.LARGURA_PONTOS,
                     cortador_automatico=not page.web,
                 )
@@ -362,7 +375,7 @@ def tela(page: ft.Page, estado, ao_voltar) -> ft.Control:
             except Exception as ex:
                 erro_impressao = ex
 
-            rotulo_cor = _nome_cor(ficha["cor_hex"])
+            rotulo_cor = _rotulo_churrasqueira(ficha.get("nome_churrasqueira"), ficha["cor_hex"])
             rotulo_pendente = " - PENDENTE DE PAGAMENTO, finalize em \"Buscar fichas\"" if not pago else ""
             if erro_impressao:
                 componentes.aviso(
@@ -417,7 +430,7 @@ def tela(page: ft.Page, estado, ao_voltar) -> ft.Control:
                 nome_cliente=campo_nome_cliente.value.strip() or "(nome do cliente)",
                 valor=_valor_unitario_digitado(), data_hora=datetime.now().strftime("%d/%m/%Y %H:%M:%S"),
                 operador_nome=estado.operador_nome, caixa_nome=estado.caixa_nome,
-                nome_churrasqueira=_nome_cor(bloco["cor_hex"]),
+                nome_churrasqueira=_rotulo_churrasqueira(bloco.get("nome"), bloco["cor_hex"]),
             )
             imagem_preview.src_base64 = base64.b64encode(png).decode("ascii")
             painel_dados.visible = False
@@ -671,7 +684,7 @@ def tela(page: ft.Page, estado, ao_voltar) -> ft.Control:
                         ),
                         ft.Text("Pronto pra vender", color=theme.TEXTO, size=26, weight=ft.FontWeight.W_800),
                         theme.subtitulo(
-                            f"Bloco atual: {_nome_cor(bloco['cor_hex'])} — próxima ficha Nº {bloco['proximo_numero']}",
+                            f"Bloco atual: {_rotulo_churrasqueira(bloco.get('nome'), bloco['cor_hex'])} — próxima ficha Nº {bloco['proximo_numero']}",
                             tamanho=16,
                         ),
                         _botao_nova_ficha_grande(),
@@ -693,12 +706,15 @@ def tela(page: ft.Page, estado, ao_voltar) -> ft.Control:
         campo_nome = theme.campo_texto("Nome do cliente", width=220)
         campo_numero = theme.campo_texto("Nº da ficha", width=110)
         try:
-            cores_disponiveis = [f["cor_hex"] for f in repository.listar_faixas_numeracao_churrasco(evento["id"])]
+            faixas_disponiveis = repository.listar_faixas_numeracao_churrasco(evento["id"])
         except ConexaoIndisponivel:
-            cores_disponiveis = []
+            faixas_disponiveis = []
         dropdown_cor = ft.Dropdown(
             label="Churrasqueira", width=200, value="",
-            options=[ft.dropdown.Option("", "Todas")] + [ft.dropdown.Option(cor, _nome_cor(cor)) for cor in cores_disponiveis],
+            options=[ft.dropdown.Option("", "Todas")] + [
+                ft.dropdown.Option(f["cor_hex"], _rotulo_churrasqueira(f.get("nome"), f["cor_hex"]))
+                for f in faixas_disponiveis
+            ],
             border_color=theme.BORDA, focused_border_color=theme.BRASA, bgcolor=theme.SURFACE_ALTA,
         )
         # Bug real reportado pelo usuario/cliente (2026-08-11, telas menores):

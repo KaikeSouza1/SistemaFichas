@@ -4,7 +4,7 @@
 
 from decimal import Decimal
 
-from psycopg.errors import UniqueViolation
+from psycopg.errors import ForeignKeyViolation, UniqueViolation
 
 from db.connection import conectar
 from pathlib import Path
@@ -108,6 +108,27 @@ def garantir_contador_por_evento() -> None:
                    RETURN n;
                END;
                $$ LANGUAGE plpgsql"""
+        )
+
+
+def garantir_coluna_emitir_ficha_produto() -> None:
+    """Migracao: 'desativar emissao de ficha' por produto (ex: doces que
+    ficam no proprio caixa) - pedido real do usuario apos o 1o evento."""
+    with conectar() as conn, conn.cursor() as cur:
+        cur.execute(
+            "ALTER TABLE produtos ADD COLUMN IF NOT EXISTS emitir_ficha BOOLEAN NOT NULL DEFAULT TRUE"
+        )
+
+
+def garantir_colunas_nome_churrasqueira() -> None:
+    """Migracao: nome livre da churrasqueira (deixa de ser preso a uma lista
+    fixa de cores) - pedido real do usuario apos o 1o evento."""
+    with conectar() as conn, conn.cursor() as cur:
+        cur.execute(
+            "ALTER TABLE faixas_numeracao_churrasco ADD COLUMN IF NOT EXISTS nome TEXT NOT NULL DEFAULT ''"
+        )
+        cur.execute(
+            "ALTER TABLE fichas_churrasco ADD COLUMN IF NOT EXISTS nome_churrasqueira TEXT NOT NULL DEFAULT ''"
         )
 
 
@@ -333,7 +354,7 @@ def listar_operadores(somente_ativos=True):
         if somente_ativos:
             cur.execute("SELECT id, nome, administrador FROM operadores WHERE ativo ORDER BY nome")
         else:
-            cur.execute("SELECT id, nome, ativo, administrador FROM operadores ORDER BY nome")
+            cur.execute("SELECT id, nome, pin, ativo, administrador FROM operadores ORDER BY nome")
         return cur.fetchall()
 
 
@@ -372,6 +393,30 @@ def criar_operador(nome, pin, administrador=False):
             (nome, pin, administrador, evento_id),
         )
         return cur.fetchone()["id"]
+
+
+def atualizar_operador(operador_id, nome, pin, administrador):
+    with conectar() as conn, conn.cursor() as cur:
+        cur.execute(
+            "UPDATE operadores SET nome=%s, pin=%s, administrador=%s WHERE id=%s",
+            (nome, pin, administrador, operador_id),
+        )
+
+
+def excluir_operador(operador_id):
+    """Exclui de verdade (nao so desativa) - so funciona se o operador nunca
+    teve nenhum movimento no banco (abertura de caixa, venda, ficha etc,
+    todos com FK pra operadores). Se ja tiver historico, o Postgres recusa
+    (ForeignKeyViolation) - nesse caso, o certo e so desativar (ver
+    definir_ativo_operador), nunca apagar quem tem venda registrada."""
+    with conectar() as conn, conn.cursor() as cur:
+        try:
+            cur.execute("DELETE FROM operadores WHERE id=%s", (operador_id,))
+        except ForeignKeyViolation:
+            raise ValueError(
+                "Esse operador já tem vendas/histórico registrado - não dá pra excluir "
+                "(só desativar), senão o histórico ficaria quebrado."
+            )
 
 
 def definir_ativo_operador(operador_id, ativo):
@@ -442,7 +487,7 @@ def listar_produtos(somente_ativos=True, incluir_ocultos=True):
         sql = """
             SELECT p.id, p.nome, p.preco, p.custo, p.cor_hex, p.estoque_controlado,
                    p.estoque_atual, p.eh_combo, p.ativo, p.oculto, p.ordem,
-                   p.ocultar_valor_impressao, p.categoria_id, c.nome AS categoria_nome
+                   p.ocultar_valor_impressao, p.emitir_ficha, p.categoria_id, c.nome AS categoria_nome
             FROM produtos p
             LEFT JOIN categorias_produto c ON c.id = p.categoria_id
         """
@@ -502,30 +547,30 @@ def excluir_produto(produto_id):
 
 def criar_produto(nome, preco, categoria_id=None, custo=0, cor_hex="#E07A3E",
                    estoque_controlado=False, estoque_atual=None, eh_combo=False, ordem=0,
-                   ocultar_valor_impressao=False):
+                   ocultar_valor_impressao=False, emitir_ficha=True):
     with conectar() as conn, conn.cursor() as cur:
         cur.execute(
             """INSERT INTO produtos
                (nome, preco, categoria_id, custo, cor_hex, estoque_controlado,
-                estoque_atual, eh_combo, ordem, ocultar_valor_impressao)
-               VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s) RETURNING id""",
+                estoque_atual, eh_combo, ordem, ocultar_valor_impressao, emitir_ficha)
+               VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s) RETURNING id""",
             (nome, preco, categoria_id, custo, cor_hex, estoque_controlado,
-             estoque_atual, eh_combo, ordem, ocultar_valor_impressao),
+             estoque_atual, eh_combo, ordem, ocultar_valor_impressao, emitir_ficha),
         )
         return cur.fetchone()["id"]
 
 
 def atualizar_produto(produto_id, nome, preco, categoria_id=None, custo=0, cor_hex="#E07A3E",
                        estoque_controlado=False, estoque_atual=None, eh_combo=False,
-                       ativo=True, oculto=False, ocultar_valor_impressao=False):
+                       ativo=True, oculto=False, ocultar_valor_impressao=False, emitir_ficha=True):
     with conectar() as conn, conn.cursor() as cur:
         cur.execute(
             """UPDATE produtos SET nome=%s, preco=%s, categoria_id=%s, custo=%s, cor_hex=%s,
                estoque_controlado=%s, estoque_atual=%s, eh_combo=%s, ativo=%s, oculto=%s,
-               ocultar_valor_impressao=%s
+               ocultar_valor_impressao=%s, emitir_ficha=%s
                WHERE id=%s""",
             (nome, preco, categoria_id, custo, cor_hex, estoque_controlado,
-             estoque_atual, eh_combo, ativo, oculto, ocultar_valor_impressao, produto_id),
+             estoque_atual, eh_combo, ativo, oculto, ocultar_valor_impressao, emitir_ficha, produto_id),
         )
 
 
@@ -751,25 +796,34 @@ def expandir_itens_para_impressao(itens):
 
     Cada ficha resultante ja vem com "ocultar_valor" (do cadastro do PRODUTO,
     nao mais uma escolha por venda) - pro componente de um combo, e a flag do
-    componente em si que vale, nao a do combo."""
+    componente em si que vale, nao a do combo.
+
+    Produto com emitir_ficha=False (ex: doces que ficam no proprio caixa, sem
+    precisar de comprovante) nao gera ficha nenhuma aqui - a venda continua
+    registrada normal, so nao sai papel pra esse item (pedido real do usuario
+    apos o 1o evento em producao)."""
     with conectar() as conn, conn.cursor() as cur:
         expandido = []
         for item in itens:
             cur.execute(
-                "SELECT produto_componente_id, quantidade, nome, ocultar_valor_impressao FROM combo_itens ci "
+                "SELECT produto_componente_id, quantidade, nome, ocultar_valor_impressao, emitir_ficha FROM combo_itens ci "
                 "JOIN produtos p ON p.id = ci.produto_componente_id WHERE ci.produto_combo_id = %s",
                 (item["produto_id"],),
             )
             componentes = cur.fetchall()
             if not componentes:
-                cur.execute("SELECT ocultar_valor_impressao FROM produtos WHERE id = %s", (item["produto_id"],))
+                cur.execute("SELECT ocultar_valor_impressao, emitir_ficha FROM produtos WHERE id = %s", (item["produto_id"],))
                 linha = cur.fetchone()
+                if linha and not linha["emitir_ficha"]:
+                    continue
                 expandido.append({**item, "ocultar_valor": bool(linha["ocultar_valor_impressao"]) if linha else False})
                 continue
             total_unidades = sum(c["quantidade"] for c in componentes)
             preco_por_ficha = Decimal(str(item["preco"])) / total_unidades if total_unidades else Decimal("0")
             for _ in range(item["quantidade"]):
                 for componente in componentes:
+                    if not componente["emitir_ficha"]:
+                        continue
                     expandido.append({
                         "produto_id": componente["produto_componente_id"],
                         "nome": componente["nome"],
@@ -1255,7 +1309,7 @@ def listar_blocos_numeracao_churrasco(evento_id):
     quem de fato incrementa)."""
     with conectar() as conn, conn.cursor() as cur:
         cur.execute(
-            """SELECT f.id, f.numero_inicio, f.numero_fim, f.cor_hex,
+            """SELECT f.id, f.numero_inicio, f.numero_fim, f.cor_hex, f.nome,
                       COALESCE(c.ultimo_numero, f.numero_inicio - 1) + 1 AS proximo_numero
                FROM faixas_numeracao_churrasco f
                LEFT JOIN contador_ficha_churrasco_bloco c
@@ -1297,7 +1351,7 @@ def registrar_ficha_churrasco_do_bloco(sessao_id, caixa_id, operador_id, faixa_i
         evento_id = cur.fetchone()["evento_id"]
 
         cur.execute(
-            "SELECT numero_inicio, numero_fim, cor_hex FROM faixas_numeracao_churrasco WHERE id = %s AND evento_id = %s",
+            "SELECT numero_inicio, numero_fim, cor_hex, nome FROM faixas_numeracao_churrasco WHERE id = %s AND evento_id = %s",
             (faixa_id, evento_id),
         )
         bloco = cur.fetchone()
@@ -1325,10 +1379,10 @@ def registrar_ficha_churrasco_do_bloco(sessao_id, caixa_id, operador_id, faixa_i
             cur.execute(
                 """INSERT INTO fichas_churrasco
                    (sessao_caixa_id, caixa_id, operador_id, evento_id, nome_carne, valor, cor_hex,
-                    nome_cliente, numero_ficha, forma_pagamento, pago)
-                   VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s) RETURNING id""",
+                    nome_churrasqueira, nome_cliente, numero_ficha, forma_pagamento, pago)
+                   VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s) RETURNING id""",
                 (sessao_id, caixa_id, operador_id, evento_id, nome_carne, valor, bloco["cor_hex"],
-                 nome_cliente, numero, forma_pagamento_gravada, pago),
+                 bloco["nome"] or "", nome_cliente, numero, forma_pagamento_gravada, pago),
             )
         except UniqueViolation:
             raise ValueError(
@@ -1337,14 +1391,15 @@ def registrar_ficha_churrasco_do_bloco(sessao_id, caixa_id, operador_id, faixa_i
         ficha_id = cur.fetchone()["id"]
         return {
             "id": ficha_id, "numero_ficha": numero, "nome_carne": nome_carne,
-            "valor": valor, "cor_hex": bloco["cor_hex"], "nome_cliente": nome_cliente, "pago": pago,
+            "valor": valor, "cor_hex": bloco["cor_hex"], "nome_churrasqueira": bloco["nome"] or "",
+            "nome_cliente": nome_cliente, "pago": pago,
         }
 
 
 def listar_faixas_numeracao_churrasco(evento_id):
     with conectar() as conn, conn.cursor() as cur:
         cur.execute(
-            "SELECT id, numero_inicio, numero_fim, cor_hex FROM faixas_numeracao_churrasco "
+            "SELECT id, numero_inicio, numero_fim, cor_hex, nome FROM faixas_numeracao_churrasco "
             "WHERE evento_id = %s ORDER BY numero_inicio",
             (evento_id,),
         )
@@ -1353,14 +1408,17 @@ def listar_faixas_numeracao_churrasco(evento_id):
 
 def definir_faixas_numeracao_churrasco(evento_id, faixas):
     """Substitui todas as faixas do evento pela lista informada - cada item e
-    (numero_inicio, numero_fim, cor_hex). A numeracao da ficha e global
-    (proximo_numero_ficha_churrasco), entao duas faixas nao podem se sobrepor:
-    ficaria ambiguo qual cor vale pra um numero. Valida isso em Python antes
-    de gravar (mais simples que uma constraint de exclusao no Postgres pra um
-    numero pequeno de faixas por evento)."""
+    (numero_inicio, numero_fim, cor_hex, nome). `nome` e o rotulo livre da
+    churrasqueira (pedido do usuario: nao ficar preso a lista fixa de cores) -
+    pode vir vazio, cai no nome derivado de cor_hex (ver churrasco._nome_cor).
+    A numeracao da ficha e global (proximo_numero_ficha_churrasco), entao duas
+    faixas nao podem se sobrepor: ficaria ambiguo qual churrasqueira vale pra
+    um numero. Valida isso em Python antes de gravar (mais simples que uma
+    constraint de exclusao no Postgres pra um numero pequeno de faixas por
+    evento)."""
     ordenadas = sorted(faixas, key=lambda f: f[0])
     fim_anterior = 0
-    for numero_inicio, numero_fim, _ in ordenadas:
+    for numero_inicio, numero_fim, *_ in ordenadas:
         if numero_inicio <= 0 or numero_fim < numero_inicio:
             raise ValueError(
                 f"Faixa inválida ({numero_inicio} a {numero_fim}): o número final não pode ser "
@@ -1374,11 +1432,13 @@ def definir_faixas_numeracao_churrasco(evento_id, faixas):
 
     with conectar() as conn, conn.cursor() as cur:
         cur.execute("DELETE FROM faixas_numeracao_churrasco WHERE evento_id = %s", (evento_id,))
-        for numero_inicio, numero_fim, cor_hex in ordenadas:
+        for faixa in ordenadas:
+            numero_inicio, numero_fim, cor_hex = faixa[0], faixa[1], faixa[2]
+            nome = faixa[3] if len(faixa) > 3 else ""
             cur.execute(
-                "INSERT INTO faixas_numeracao_churrasco (evento_id, numero_inicio, numero_fim, cor_hex) "
-                "VALUES (%s, %s, %s, %s)",
-                (evento_id, numero_inicio, numero_fim, cor_hex),
+                "INSERT INTO faixas_numeracao_churrasco (evento_id, numero_inicio, numero_fim, cor_hex, nome) "
+                "VALUES (%s, %s, %s, %s, %s)",
+                (evento_id, numero_inicio, numero_fim, cor_hex, nome or ""),
             )
 
 
@@ -1416,7 +1476,7 @@ def fichas_churrasco_recentes(sessao_id, limite=30):
     with conectar() as conn, conn.cursor() as cur:
         cur.execute(
             """SELECT id, numero_ficha, nome_carne, valor, nome_cliente, forma_pagamento, pago, entregue,
-                      status, criado_em
+                      status, criado_em, cor_hex, nome_churrasqueira
                FROM fichas_churrasco WHERE sessao_caixa_id = %s
                ORDER BY criado_em DESC LIMIT %s""",
             (sessao_id, limite),
@@ -1444,8 +1504,8 @@ def buscar_fichas_churrasco(evento_id, nome_cliente=None, numero_ficha=None, cor
 
     with conectar() as conn, conn.cursor() as cur:
         cur.execute(
-            f"""SELECT f.id, f.numero_ficha, f.nome_carne, f.nome_cliente, f.valor, f.cor_hex, f.forma_pagamento,
-                       f.pago, f.entregue,
+            f"""SELECT f.id, f.numero_ficha, f.nome_carne, f.nome_cliente, f.valor, f.cor_hex, f.nome_churrasqueira,
+                       f.forma_pagamento, f.pago, f.entregue,
                        f.status, f.criado_em, o.nome AS operador_nome, c.nome AS caixa_nome
                 FROM fichas_churrasco f
                 JOIN sessoes_caixa s ON s.id = f.sessao_caixa_id
@@ -1465,7 +1525,8 @@ def resumo_churrasco_por_cor(evento_id):
     soma todos os eventos (usado em Relatorios > "Todos os eventos")."""
     with conectar() as conn, conn.cursor() as cur:
         cur.execute(
-            """SELECT f.cor_hex, COUNT(*) AS qtd, COALESCE(SUM(f.valor), 0) AS total
+            """SELECT f.cor_hex, MAX(NULLIF(f.nome_churrasqueira, '')) AS nome_churrasqueira,
+                      COUNT(*) AS qtd, COALESCE(SUM(f.valor), 0) AS total
                FROM fichas_churrasco f
                JOIN sessoes_caixa s ON s.id = f.sessao_caixa_id
                WHERE f.status = 'EMITIDA' AND (%s::int IS NULL OR s.evento_id = %s)
@@ -1483,6 +1544,23 @@ def resumo_churrasco_por_carne(evento_id):
                JOIN sessoes_caixa s ON s.id = f.sessao_caixa_id
                WHERE f.status = 'EMITIDA' AND (%s::int IS NULL OR s.evento_id = %s)
                GROUP BY f.nome_carne ORDER BY qtd DESC""",
+            (evento_id, evento_id),
+        )
+        return cur.fetchall()
+
+
+def listar_fichas_churrasco_relatorio(evento_id):
+    """Relatorio final "achatado" do churrasco (pedido do usuario apos o 1o
+    evento: substitui o "por carne" agrupado) - uma linha por ficha PAGA e
+    EMITIDA, com numero/carne/valor, pra imprimir tudo junto sem precisar
+    escolher/filtrar carne nenhuma. Ordenado por numero da ficha."""
+    with conectar() as conn, conn.cursor() as cur:
+        cur.execute(
+            """SELECT f.numero_ficha, f.nome_carne, f.valor
+               FROM fichas_churrasco f
+               JOIN sessoes_caixa s ON s.id = f.sessao_caixa_id
+               WHERE f.status = 'EMITIDA' AND f.pago AND (%s::int IS NULL OR s.evento_id = %s)
+               ORDER BY f.numero_ficha""",
             (evento_id, evento_id),
         )
         return cur.fetchall()

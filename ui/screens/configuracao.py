@@ -366,6 +366,13 @@ def _tab_produtos(page):
             label="Não mostrar valor na ficha impressa",
             value=bool(produto and produto["ocultar_valor_impressao"]),
         )
+        # Pedido real do usuario apos o 1o evento: produto que fica no
+        # proprio caixa (ex: doces) nao precisa de ficha nenhuma pra
+        # retirar em outro balcao.
+        switch_emitir_ficha = ft.Switch(
+            label="Emitir ficha ao vender",
+            value=bool(produto["emitir_ficha"]) if produto else True,
+        )
 
         switch_estoque = ft.Switch(label="Controlar estoque", value=bool(produto and produto["estoque_controlado"]))
         campo_estoque = theme.campo_texto(
@@ -480,7 +487,7 @@ def _tab_produtos(page):
                 repository.atualizar_produto(
                     produto["id"], campo_nome.value.strip(), preco, categoria_id, custo, dropdown_cor.value,
                     switch_estoque.value, estoque_atual, switch_combo.value, switch_ativo.value, switch_oculto.value,
-                    switch_ocultar_valor.value,
+                    switch_ocultar_valor.value, switch_emitir_ficha.value,
                 )
                 componentes.fechar_dialogo(page, dlg)
                 recarregar()
@@ -489,7 +496,7 @@ def _tab_produtos(page):
                 novo_id = repository.criar_produto(
                     campo_nome.value.strip(), preco, categoria_id, custo, dropdown_cor.value,
                     switch_estoque.value, estoque_atual, switch_combo.value,
-                    ocultar_valor_impressao=switch_ocultar_valor.value,
+                    ocultar_valor_impressao=switch_ocultar_valor.value, emitir_ficha=switch_emitir_ficha.value,
                 )
                 recarregar()
                 componentes.fechar_dialogo(page, dlg)
@@ -503,7 +510,8 @@ def _tab_produtos(page):
             title=ft.Text("Editar produto" if produto else "Novo produto", color=theme.TEXTO),
             content=ft.Column(
                 [campo_nome, ft.Row([campo_preco, campo_custo]), ft.Row([dropdown_categoria, dropdown_cor]),
-                 campo_nova_categoria, switch_ocultar_valor, ft.Row([switch_estoque, campo_estoque]), switch_combo,
+                 campo_nova_categoria, switch_ocultar_valor, switch_emitir_ficha,
+                 ft.Row([switch_estoque, campo_estoque]), switch_combo,
                  botao_editar_combo, ft.Row([switch_ativo, switch_oculto])],
                 tight=True, spacing=14, scroll=ft.ScrollMode.AUTO, width=500, height=560,
             ),
@@ -810,6 +818,26 @@ def _tab_operadores(page):
             repository.definir_ativo_operador(o["id"], not o["ativo"])
             recarregar()
 
+        def excluir(e):
+            def efetivar():
+                try:
+                    repository.excluir_operador(o["id"])
+                except ValueError as ex:
+                    componentes.aviso(page, str(ex), cor=theme.ALERTA)
+                    return
+                except ConexaoIndisponivel:
+                    componentes.dialogo_erro_conexao(page)
+                    return
+                recarregar()
+                componentes.aviso(page, "Operador excluído.")
+
+            componentes.dialogo_confirmacao(
+                page, "Excluir operador",
+                f"Excluir \"{o['nome']}\" para sempre? Só funciona se ele nunca vendeu nada "
+                f"(senão o histórico quebraria) - nesse caso, é melhor só desativar.",
+                ao_confirmar=efetivar, texto_confirmar="Excluir",
+            )
+
         return ft.Container(
             content=ft.Row(
                 [
@@ -817,29 +845,44 @@ def _tab_operadores(page):
                             color=theme.TEXTO, weight=ft.FontWeight.W_600, expand=True),
                     ft.Text("Ativo" if o["ativo"] else "Inativo", color=theme.SUCESSO if o["ativo"] else theme.TEXTO_FRACO, size=12),
                     ft.Switch(value=o["ativo"], on_change=alternar),
+                    ft.IconButton(ft.icons.EDIT, icon_color=theme.TEXTO_SUAVE, icon_size=18,
+                                  tooltip="Editar", on_click=lambda e: abrir_formulario(o)),
+                    ft.IconButton(ft.icons.DELETE_OUTLINE, icon_color=theme.ERRO, icon_size=18,
+                                  tooltip="Excluir", on_click=excluir),
                 ],
             ),
             bgcolor=theme.SURFACE_ALTA, border_radius=theme.RADIUS, padding=ft.padding.symmetric(8, 14),
         )
 
-    def abrir_formulario_novo(e):
-        campo_nome = theme.campo_texto("Nome", width=280)
-        campo_pin = theme.campo_texto("PIN numérico", width=280)
+    def abrir_formulario(operador=None):
+        """`operador=None` cria um novo; passar a linha edita ela (pedido do
+        usuario: dava pra criar e ativar/desativar, mas nao editar nome/PIN/
+        admin nem excluir de verdade)."""
+        campo_nome = theme.campo_texto("Nome", width=280, value=operador["nome"] if operador else "")
+        campo_pin = theme.campo_texto("PIN numérico", width=280, value=operador["pin"] if operador else "")
         # Se ainda nao existe nenhum operador, esse vai ser o primeiro -
         # marca administrador por padrao, senao ninguem consegue entrar em
         # Operadores/Evento depois (precisa de um admin pra criar o proximo).
-        switch_administrador = ft.Switch(label="Administrador", value=not operadores)
+        switch_administrador = ft.Switch(
+            label="Administrador",
+            value=operador["administrador"] if operador else not operadores,
+        )
 
         def salvar(e):
             if not campo_nome.value.strip() or not campo_pin.value.strip():
                 return
-            repository.criar_operador(campo_nome.value.strip(), campo_pin.value.strip(), switch_administrador.value)
+            if operador:
+                repository.atualizar_operador(
+                    operador["id"], campo_nome.value.strip(), campo_pin.value.strip(), switch_administrador.value,
+                )
+            else:
+                repository.criar_operador(campo_nome.value.strip(), campo_pin.value.strip(), switch_administrador.value)
             componentes.fechar_dialogo(page, dlg)
             recarregar()
 
         dlg = ft.AlertDialog(
             modal=True, bgcolor=theme.SURFACE,
-            title=ft.Text("Novo operador", color=theme.TEXTO),
+            title=ft.Text("Editar operador" if operador else "Novo operador", color=theme.TEXTO),
             content=ft.Column([campo_nome, campo_pin, switch_administrador], tight=True, spacing=12),
             actions=[ft.TextButton("Cancelar", on_click=lambda e: componentes.fechar_dialogo(page, dlg)),
                      theme.botao_primario("Salvar", on_click=salvar)],
@@ -847,6 +890,9 @@ def _tab_operadores(page):
         page.dialog = dlg
         dlg.open = True
         page.update()
+
+    def abrir_formulario_novo(e):
+        abrir_formulario(None)
 
     lista.controls = [_linha_operador(o) for o in operadores]
 

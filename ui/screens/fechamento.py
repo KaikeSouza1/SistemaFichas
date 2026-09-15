@@ -3,16 +3,23 @@ from datetime import datetime
 import flet as ft
 
 from config import settings
-from db import repository
+from db import postgres_local, repository
 from db.connection import ConexaoIndisponivel
 from printing import escpos_printer, templates
 from ui import componentes, theme
 
 
-def tela(page: ft.Page, estado, ao_concluir, ao_tentar_de_novo, ao_voltar=None) -> ft.Control:
+def tela(page: ft.Page, estado, ao_concluir, ao_tentar_de_novo, ao_voltar=None, somente_consulta=False) -> ft.Control:
+    """`somente_consulta=True` (pedido do usuario, 2026-09) e o "relatório
+    gerencial de caixa aberto" - MESMA tela/calculo do fechamento normal
+    (resumo_sessao), so pra CONSULTAR o que ja foi vendido e o estoque atual
+    no meio do evento, sem fechar sessão nenhuma - so imprime, nunca chama
+    fechar_sessao."""
     try:
         resumo = repository.resumo_sessao(estado.sessao_id)
         evento = repository.obter_evento_aberto()
+        produtos_estoque = [p for p in repository.listar_produtos(somente_ativos=True) if p["estoque_controlado"]] \
+            if somente_consulta else []
     except ConexaoIndisponivel:
         return componentes.tela_estado_erro("Não deu para calcular o fechamento.", ao_tentar_de_novo)
 
@@ -43,6 +50,17 @@ def tela(page: ft.Page, estado, ao_concluir, ao_tentar_de_novo, ao_voltar=None) 
         spacing=6,
     )
 
+    # Pedido real do usuario apos o 1o evento: emitir mais de 1 via do
+    # relatorio final (ex: uma pro caixa, uma pro responsavel do evento).
+    campo_vias = theme.campo_texto("Vias", value="1", width=70, text_align=ft.TextAlign.CENTER)
+
+    def _vias() -> int:
+        try:
+            n = int(campo_vias.value)
+        except (ValueError, TypeError):
+            n = 1
+        return max(1, min(n, 10))
+
     def confirmar_fechamento(e):
         componentes.dialogo_confirmacao(
             page,
@@ -58,6 +76,10 @@ def tela(page: ft.Page, estado, ao_concluir, ao_tentar_de_novo, ao_voltar=None) 
         except ConexaoIndisponivel:
             componentes.dialogo_erro_conexao(page, tentar_de_novo=None)
             return
+        try:
+            postgres_local.fazer_backup()
+        except Exception:
+            pass  # backup e so uma rede de seguranca extra, nunca deve travar o fechamento
         estado.encerrar_sessao_local()
         ao_concluir()
 
@@ -97,12 +119,50 @@ def tela(page: ft.Page, estado, ao_concluir, ao_tentar_de_novo, ao_voltar=None) 
                 resumo=resumo,
                 rodape=evento["rodape"],
             )
-            escpos_printer.imprimir(cfg_local["impressora_windows"], dados)
+            for _ in range(_vias()):
+                escpos_printer.imprimir(cfg_local["impressora_windows"], dados)
         except Exception as ex:
             mostrar_erro_impressao(ex)
             return
 
         fechar_de_verdade()
+
+    def imprimir_gerencial(e):
+        try:
+            dados = templates.fechamento_caixa_bytes(
+                nome_evento=f"{evento['nome']} (CAIXA AINDA ABERTO)",
+                caixa_nome=estado.caixa_nome,
+                operador_nome=estado.operador_nome,
+                data_hora=datetime.now().strftime("%d/%m/%Y %H:%M:%S"),
+                resumo=resumo,
+                rodape=evento["rodape"],
+            )
+            for _ in range(_vias()):
+                escpos_printer.imprimir(cfg_local["impressora_windows"], dados)
+            componentes.aviso(page, "Relatório gerencial enviado para a impressora.")
+        except Exception as ex:
+            componentes.aviso(page, f"Não deu para imprimir: {ex}", cor=theme.ALERTA)
+
+    cartao_estoque = theme.cartao(
+        ft.Column(
+            [
+                ft.Text("Estoque atual", color=theme.TEXTO, weight=ft.FontWeight.W_700),
+                ft.Column(
+                    [
+                        ft.Row(
+                            [ft.Text(p["nome"], color=theme.TEXTO, size=13, expand=True),
+                             ft.Text(str(p["estoque_atual"]), color=theme.BRASA_CLARA, size=13, width=60,
+                                     text_align=ft.TextAlign.RIGHT)],
+                        )
+                        for p in produtos_estoque
+                    ] or [ft.Text("Nenhum produto com estoque controlado.", color=theme.TEXTO_FRACO, size=13)],
+                    spacing=6, scroll=ft.ScrollMode.AUTO, height=180,
+                ),
+            ],
+            spacing=10,
+        ),
+        expand=1,
+    ) if somente_consulta else None
 
     return ft.Container(
         content=ft.Column(
@@ -110,7 +170,7 @@ def tela(page: ft.Page, estado, ao_concluir, ao_tentar_de_novo, ao_voltar=None) 
                 ft.Row(
                     ([ft.IconButton(ft.icons.ARROW_BACK, icon_color=theme.TEXTO, on_click=lambda e: ao_voltar())] if ao_voltar else [])
                     + [ft.Icon(ft.icons.RECEIPT_LONG, color=theme.BRASA, size=26),
-                       theme.titulo("Fechamento de caixa", tamanho=22)],
+                       theme.titulo("Relatório gerencial (caixa aberto)" if somente_consulta else "Fechamento de caixa", tamanho=22)],
                     spacing=10,
                 ),
                 theme.subtitulo(f"{estado.caixa_nome} · Operador: {estado.operador_nome}"),
@@ -148,13 +208,19 @@ def tela(page: ft.Page, estado, ao_concluir, ao_tentar_de_novo, ao_voltar=None) 
                             ),
                             expand=1,
                         ),
-                    ],
+                    ] + ([cartao_estoque] if cartao_estoque else []),
                     spacing=16,
                     expand=True,
                 ),
                 ft.Row(
-                    [theme.botao_primario("Imprimir e fechar caixa", icone=ft.icons.PRINT, on_click=confirmar_fechamento, largura=280, altura=56)],
-                    alignment=ft.MainAxisAlignment.END,
+                    [campo_vias,
+                     theme.botao_primario(
+                        "Imprimir relatório" if somente_consulta else "Imprimir e fechar caixa",
+                        icone=ft.icons.PRINT,
+                        on_click=imprimir_gerencial if somente_consulta else confirmar_fechamento,
+                        largura=280, altura=56,
+                    )],
+                    alignment=ft.MainAxisAlignment.END, spacing=10,
                 ),
             ],
             spacing=18,

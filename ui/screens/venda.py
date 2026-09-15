@@ -58,7 +58,7 @@ def _fmt_num(valor) -> str:
 
 
 def tela(page: ft.Page, estado, ao_fechar_caixa, ao_deslogar, ao_abrir_configuracao, ao_abrir_relatorios,
-         ao_abrir_churrasco, ao_tentar_de_novo) -> ft.Control:
+         ao_abrir_churrasco, ao_tentar_de_novo, ao_abrir_relatorio_gerencial=None) -> ft.Control:
     try:
         evento = repository.obter_evento_aberto()
         categorias = repository.listar_categorias()
@@ -343,16 +343,20 @@ def tela(page: ft.Page, estado, ao_fechar_caixa, ao_deslogar, ao_abrir_configura
             dlg.update()
 
         def confirmar_dinheiro_rapido(e):
+            # Valor recebido nao e mais obrigatorio (pedido do usuario apos o
+            # 1o evento) - campo vazio assume que recebeu certinho (sem
+            # troco), pra nao travar quem so quer confirmar rapido.
             try:
                 pago = _parse_moeda(campo_pago_rapido.value)
             except ValueError:
-                componentes.aviso(page, "Informe o valor recebido.", cor=theme.ERRO)
-                return
+                pago = total
             if pago < total:
                 componentes.aviso(page, "Valor recebido é menor que o total.", cor=theme.ERRO)
                 return
             componentes.fechar_dialogo(page, dlg)
             finalizar([{"forma": "DINHEIRO", "valor": total}])
+
+        campo_pago_rapido.on_submit = confirmar_dinheiro_rapido
 
         painel_dinheiro_rapido = ft.Container(
             visible=False,
@@ -465,12 +469,15 @@ def tela(page: ft.Page, estado, ao_fechar_caixa, ao_deslogar, ao_abrir_configura
                 return
             valor_dinheiro = _valor_campo(campos_valor_dividido["DINHEIRO"])
             if valor_dinheiro > 0:
-                pago = _valor_campo(campo_pago_dividido)
+                # Vazio = recebeu certinho, sem troco (mesma regra do modo rapido).
+                pago = _valor_campo(campo_pago_dividido) if campo_pago_dividido.value.strip() else valor_dinheiro
                 if pago < valor_dinheiro:
                     componentes.aviso(page, "Informe um valor recebido em dinheiro válido.", cor=theme.ERRO)
                     return
             componentes.fechar_dialogo(page, dlg)
             finalizar(pagamentos_form)
+
+        campo_pago_dividido.on_submit = confirmar_dividido
 
         def voltar_modo_rapido(e=None):
             for campo in campos_valor_dividido.values():
@@ -548,6 +555,14 @@ def tela(page: ft.Page, estado, ao_fechar_caixa, ao_deslogar, ao_abrir_configura
 
         try:
             itens_impressao = repository.expandir_itens_para_impressao(itens)
+            if not itens_impressao:
+                # Todos os itens do carrinho tem emitir_ficha=False (ex: so
+                # doces, que ficam no proprio caixa) - venda ja foi
+                # registrada acima, so nao ha nada pra imprimir.
+                componentes.aviso(page, f"Pedido #{resultado['numero_pedido']} registrado (sem ficha pra imprimir).")
+                estado.limpar_carrinho()
+                atualizar_carrinho_ui()
+                return
             dados = templates.fichas_venda_bytes(
                 nome_evento=evento["nome"],
                 numero_pedido=resultado["numero_pedido"],
@@ -867,6 +882,8 @@ def tela(page: ft.Page, estado, ao_fechar_caixa, ao_deslogar, ao_abrir_configura
             ft.PopupMenuItem(text="Vendas recentes", icon=ft.icons.RECEIPT_LONG, on_click=abrir_dialogo_vendas_recentes),
             ft.PopupMenuItem(text="Relatórios", icon=ft.icons.BAR_CHART,
                               on_click=lambda e: _parar_polling_e_chamar(ao_abrir_relatorios)()),
+            ft.PopupMenuItem(text="Relatório gerencial (caixa aberto)", icon=ft.icons.INSIGHTS,
+                              on_click=lambda e: _parar_polling_e_chamar(ao_abrir_relatorio_gerencial)()),
             ft.PopupMenuItem(text="Configurações", icon=ft.icons.SETTINGS,
                               on_click=lambda e: _parar_polling_e_chamar(ao_abrir_configuracao)()),
             ft.PopupMenuItem(text="Trocar operador", icon=ft.icons.LOGOUT,
@@ -886,6 +903,8 @@ def tela(page: ft.Page, estado, ao_fechar_caixa, ao_deslogar, ao_abrir_configura
             theme.botao_secundario("Vendas recentes", icone=ft.icons.RECEIPT_LONG, on_click=abrir_dialogo_vendas_recentes),
             theme.botao_secundario("Relatórios", icone=ft.icons.BAR_CHART,
                                     on_click=lambda e: _parar_polling_e_chamar(ao_abrir_relatorios)()),
+            theme.botao_secundario("Gerencial", icone=ft.icons.INSIGHTS,
+                                    on_click=lambda e: _parar_polling_e_chamar(ao_abrir_relatorio_gerencial)()),
             theme.botao_secundario("Configurações", icone=ft.icons.SETTINGS,
                                     on_click=lambda e: _parar_polling_e_chamar(ao_abrir_configuracao)()),
             theme.botao_secundario("Trocar operador", icone=ft.icons.LOGOUT,

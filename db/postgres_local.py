@@ -7,6 +7,7 @@ pg_ctl start para subir uma instancia local, acessivel pelos outros caixas
 na mesma rede.
 """
 
+import os
 import socket
 import subprocess
 import sys
@@ -40,6 +41,10 @@ _BIN = PASTA_POSTGRES / "bin"
 _INITDB = _BIN / "initdb.exe"
 _PG_CTL = _BIN / "pg_ctl.exe"
 _POSTGRES = _BIN / "postgres.exe"
+_PG_DUMP = _BIN / "pg_dump.exe"
+
+PASTA_BACKUPS = PASTA_DADOS_LOCAIS / "backups"
+_MAX_BACKUPS = 20
 
 
 class PostgresLocalIndisponivel(Exception):
@@ -253,3 +258,37 @@ def criar_banco_se_preciso() -> None:
             cur.execute("SELECT 1 FROM pg_database WHERE datname = %s", (NOME_BANCO,))
             if not cur.fetchone():
                 cur.execute(f'CREATE DATABASE "{NOME_BANCO}"')
+
+
+def fazer_backup() -> Path | None:
+    """Backup local (pg_dump -Fc, um arquivo so, restaura com pg_restore) pra
+    quem so tem 1 PC/evento - se o Windows travar/o processo cair de um jeito
+    feio (energia, hardware), a copia mais recente fica aqui, nao so dentro
+    do datadir que pode ter corrompido. Pedido real do usuario apos travar
+    durante um evento e "zerar" a sessao de caixa (2026-09) - guardamos varias
+    copias com timestamp (rotaciona as mais antigas) pra sempre ter um
+    checkpoint recente pra restaurar manualmente se precisar (`pg_restore`).
+    Roda so quando o Postgres local ja esta de pe (servidor do evento);
+    silenciosa se falhar (nao deve derrubar o app por causa de um backup)."""
+    if not disponivel() or not status():
+        return None
+    PASTA_BACKUPS.mkdir(parents=True, exist_ok=True)
+    destino = PASTA_BACKUPS / f"backup_{time.strftime('%Y%m%d_%H%M%S')}.dump"
+    try:
+        resultado = subprocess.run(
+            [str(_PG_DUMP), "-h", "127.0.0.1", "-p", str(PORTA_PADRAO), "-U", USUARIO_PADRAO,
+             "-Fc", "-f", str(destino), NOME_BANCO],
+            capture_output=True, text=True, timeout=60, creationflags=_SEM_JANELA,
+            env={**os.environ, "PGPASSWORD": SENHA_PADRAO},
+        )
+        if resultado.returncode != 0:
+            destino.unlink(missing_ok=True)
+            return None
+    except Exception:
+        destino.unlink(missing_ok=True)
+        return None
+
+    backups = sorted(PASTA_BACKUPS.glob("backup_*.dump"), key=lambda p: p.name)
+    for antigo in backups[:-_MAX_BACKUPS]:
+        antigo.unlink(missing_ok=True)
+    return destino

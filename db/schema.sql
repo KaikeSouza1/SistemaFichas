@@ -54,6 +54,11 @@ CREATE TABLE produtos (
     -- cortesia/brinde) - vale tambem quando este produto e componente de
     -- um combo (a ficha daquele componente especifico sai sem valor).
     ocultar_valor_impressao BOOLEAN NOT NULL DEFAULT FALSE,
+    -- se desmarcado, a venda desse produto NAO imprime ficha nenhuma (ex:
+    -- doces que ficam no proprio caixa, sem precisar levar comprovante pra
+    -- retirar em outro balcao) - venda continua registrada normal, so nao
+    -- gera papel. Pedido real do usuario apos o 1o evento em producao.
+    emitir_ficha BOOLEAN NOT NULL DEFAULT TRUE,
     ordem INTEGER NOT NULL DEFAULT 0,
     criado_em TIMESTAMPTZ NOT NULL DEFAULT now()
 );
@@ -271,6 +276,10 @@ CREATE TABLE faixas_numeracao_churrasco (
     numero_inicio INTEGER NOT NULL CHECK (numero_inicio > 0),
     numero_fim INTEGER NOT NULL CHECK (numero_fim >= numero_inicio),
     cor_hex TEXT NOT NULL,
+    -- nome livre da churrasqueira (pedido do usuario: nao ficar preso a uma
+    -- lista fixa de cores/nomes) - vazio cai no nome antigo derivado do
+    -- cor_hex (ver churrasco._nome_cor), pra faixas salvas antes disso existir.
+    nome TEXT NOT NULL DEFAULT '',
     criado_em TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
@@ -313,6 +322,9 @@ CREATE TABLE fichas_churrasco (
     -- aqui pelo mesmo motivo de nome_carne (historico correto mesmo se o
     -- bloco for reconfigurado depois).
     cor_hex TEXT NOT NULL,
+    -- nome livre da churrasqueira "congelado" no momento da venda (mesmo
+    -- motivo de nome_carne/cor_hex) - vazio cai no nome derivado de cor_hex.
+    nome_churrasqueira TEXT NOT NULL DEFAULT '',
     nome_cliente TEXT NOT NULL,
     numero_ficha INTEGER NOT NULL,
     -- NULL enquanto pago=false (ainda nao foi decidido/cobrado) - so entra no
