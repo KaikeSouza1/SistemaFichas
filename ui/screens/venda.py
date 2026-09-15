@@ -997,6 +997,16 @@ def tela(page: ft.Page, estado, ao_fechar_caixa, ao_deslogar, ao_abrir_configura
 
     page.on_resized = _ajustar_layout
     _ajustar_layout()
+    # Bug real reportado pelo usuario (2026-09): em notebook, "Fechar caixa"
+    # ficava sumido (fora da largura visivel) at minimizar/restaurar a
+    # janela - so ai o layout recalculava certo. Causa: `page.width` ainda
+    # nao esta populado no instante exato em que a tela monta (fica
+    # None/0), cai no fallback "or 1000" e assume erroneamente o layout
+    # LARGO (todos os botoes + Fechar caixa juntos, sem caber) - so um
+    # resize de verdade corrige. Reforca com um recheck curto depois que a
+    # janela ja terminou de desenhar (mesmo truque de atraso ja usado no
+    # bug do dialogo do combo, ver memoria do projeto).
+    threading.Timer(0.3, _ajustar_layout).start()
 
     atualizar_grade()
     atualizar_carrinho_ui()
