@@ -1,6 +1,7 @@
 import base64
 import threading
 import time
+import traceback
 from datetime import datetime
 from decimal import Decimal, InvalidOperation
 
@@ -13,6 +14,24 @@ from printing import escpos_printer, templates
 from ui import componentes, theme
 
 INTERVALO_VERIFICAR_NOVIDADE_SEGUNDOS = 8
+
+
+def _logar_erro(contexto: str, ex: Exception) -> None:
+    """Mesmo padrao de ui/screens/configuracao.py: sem isso, uma excecao
+    "estranha" (que nao seja ConexaoIndisponivel/ValueError) dentro de um
+    clique desaparece SEM NENHUM AVISO no .exe empacotado (sem console) -
+    bug real visto num video (2026-09-16): "Confirmar" no pagamento fechava
+    o dialogo, o item continuava no carrinho, e nenhum erro aparecia na
+    tela. Agora qualquer excecao assim fica registrada em
+    %LOCALAPPDATA%\\SistemaChurrasco\\ui_errors.log."""
+    try:
+        caminho = settings.PASTA_DADOS_LOCAIS / "ui_errors.log"
+        settings.PASTA_DADOS_LOCAIS.mkdir(parents=True, exist_ok=True)
+        with open(caminho, "a", encoding="utf-8") as f:
+            f.write(f"\n--- {contexto} ---\n")
+            f.write(traceback.format_exc())
+    except Exception:
+        pass
 
 
 def _assinatura_catalogo(produtos, categorias, evento):
@@ -548,6 +567,15 @@ def tela(page: ft.Page, estado, ao_fechar_caixa, ao_deslogar, ao_abrir_configura
             componentes.aviso(page, str(ex), cor=theme.ERRO)
             recarregar_dados()
             return
+        except Exception as ex:
+            # Qualquer outro erro (nao previsto) NUNCA pode desaparecer
+            # silencioso - antes disso, o item ficava "preso" no carrinho
+            # sem nenhum aviso (bug real visto por video, 2026-09-16).
+            _logar_erro("finalizar venda - registrar_venda", ex)
+            componentes.aviso(
+                page, f"Não foi possível registrar a venda: {ex}. Veja ui_errors.log.", cor=theme.ERRO,
+            )
+            return
 
         qtd_pedidos_caixa["valor"] += 1
         texto_qtd_pedidos.value = f"{qtd_pedidos_caixa['valor']} pedido(s) feito(s) neste caixa"
@@ -578,6 +606,7 @@ def tela(page: ft.Page, estado, ao_fechar_caixa, ao_deslogar, ao_abrir_configura
             else:
                 escpos_printer.imprimir(cfg_local["impressora_windows"], dados)
         except Exception as ex:
+            _logar_erro("finalizar venda - impressao", ex)
             componentes.aviso(
                 page,
                 f"Venda #{resultado['numero_pedido']} registrada, mas a impressão falhou: {ex}. "

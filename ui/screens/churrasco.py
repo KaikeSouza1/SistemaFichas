@@ -18,6 +18,7 @@ de Configurações gerais (pedido do usuário - "deixa esse módulo mais separad
 import base64
 import threading
 import time
+import traceback
 from datetime import datetime
 from decimal import Decimal, InvalidOperation
 
@@ -29,6 +30,21 @@ from db.connection import ConexaoIndisponivel
 from printing import escpos_printer, templates
 from ui import componentes, theme
 from ui.screens.configuracao import CORES_PRESET
+
+
+def _logar_erro(contexto: str, ex: Exception) -> None:
+    """Mesmo padrao de ui/screens/configuracao.py/venda.py: sem isso, uma
+    excecao "estranha" dentro de um clique desaparece SEM NENHUM AVISO no
+    .exe empacotado (sem console). Registra em
+    %LOCALAPPDATA%\\SistemaChurrasco\\ui_errors.log."""
+    try:
+        caminho = settings.PASTA_DADOS_LOCAIS / "ui_errors.log"
+        settings.PASTA_DADOS_LOCAIS.mkdir(parents=True, exist_ok=True)
+        with open(caminho, "a", encoding="utf-8") as f:
+            f.write(f"\n--- {contexto} ---\n")
+            f.write(traceback.format_exc())
+    except Exception:
+        pass
 
 INTERVALO_ATUALIZAR_TOTAIS_SEGUNDOS = 8
 LARGURA_PONTOS_CELULAR = 576
@@ -355,6 +371,14 @@ def tela(page: ft.Page, estado, ao_voltar) -> ft.Control:
             except ValueError as ex:
                 componentes.aviso(page, str(ex), cor=theme.ERRO)
                 return
+            except Exception as ex:
+                # Qualquer outro erro (nao previsto) registrando a ficha
+                # NUNCA pode desaparecer silencioso - bug real visto por
+                # video (2026-09-16): dialogo fechava, nada acontecia, sem
+                # nenhum aviso na tela.
+                _logar_erro("_finalizar churrasco - registrar_ficha", ex)
+                componentes.aviso(page, f"Não foi possível registrar a ficha: {ex}. Veja ui_errors.log.", cor=theme.ERRO)
+                return
             componentes.fechar_dialogo(page, dlg)
 
             erro_impressao = None
@@ -373,6 +397,7 @@ def tela(page: ft.Page, estado, ao_voltar) -> ft.Control:
                 else:
                     escpos_printer.imprimir(cfg_local["impressora_windows"], dados)
             except Exception as ex:
+                _logar_erro("_finalizar churrasco - impressao", ex)
                 erro_impressao = ex
 
             rotulo_cor = _rotulo_churrasqueira(ficha.get("nome_churrasqueira"), ficha["cor_hex"])

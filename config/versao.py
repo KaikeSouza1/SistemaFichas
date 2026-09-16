@@ -7,7 +7,7 @@ corpo (body) do release, como "versao=2026.08.06.1" - o app compara esse
 valor com o proprio VERSAO_APP pra saber se tem uma build mais nova.
 """
 
-VERSAO_APP = "2026.09.16.2"
+VERSAO_APP = "2026.09.16.3"
 
 REPO = "KaikeSouza1/SistemaFichas"
 TAG = "v1.0.0"
