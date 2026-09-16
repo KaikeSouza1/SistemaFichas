@@ -19,10 +19,20 @@ class ConexaoIndisponivel(Exception):
 
 
 def _dsn(pg: dict) -> str:
+    # statement_timeout/lock_timeout (bug real, 2026-09-16): connect_timeout
+    # so protege o momento de CONECTAR - uma QUERY que fica esperando um lock
+    # de linha travado por OUTRO caixa (ex: dois caixas vendendo o mesmo
+    # produto quase ao mesmo tempo, ver _consumir_estoque) nao tinha limite
+    # nenhum e podia ficar pendurada pra sempre, sem nenhuma excecao (o
+    # clique parecia simplesmente "nao fazer nada", item preso no carrinho,
+    # nenhum erro pra logar). Agora qualquer query trava no maximo 10s e
+    # levanta um erro de verdade (capturado como ConexaoIndisponivel, ver
+    # conectar() abaixo).
     return (
         f"host={pg['host']} port={pg['port']} dbname={pg['dbname']} "
         f"user={pg['user']} password={pg['password']} connect_timeout=8 "
-        f"sslmode={pg.get('sslmode', 'prefer')}"
+        f"sslmode={pg.get('sslmode', 'prefer')} "
+        f"options='-c statement_timeout=10000 -c lock_timeout=10000'"
     )
 
 
@@ -69,6 +79,16 @@ def conectar():
     try:
         yield conn
         conn.commit()
+    except (psycopg.errors.QueryCanceled, psycopg.errors.LockNotAvailable) as exc:
+        # statement_timeout/lock_timeout estourou (query travada esperando
+        # lock de outro caixa, ver _dsn acima) - mesmo tratamento visivel de
+        # ConexaoIndisponivel (dialogo claro), em vez de propagar um erro
+        # cru do psycopg que os callers nao esperam.
+        conn.rollback()
+        raise ConexaoIndisponivel(
+            "Uma operação demorou demais (provável disputa com outro caixa vendendo o mesmo "
+            "produto ao mesmo tempo) - tente de novo."
+        ) from exc
     except Exception:
         conn.rollback()
         raise
