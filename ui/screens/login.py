@@ -2,6 +2,7 @@ import threading
 
 import flet as ft
 
+from config.versao import VERSAO_APP
 from db import atualizacao, repository
 from db.connection import ConexaoIndisponivel
 from ui import componentes, theme
@@ -181,7 +182,7 @@ def tela(page: ft.Page, estado, ao_autenticar, ao_tentar_de_novo, ao_abrir_confi
             [
                 ft.Row(
                     [
-                        ft.Text(f"Caixa: {estado.caixa_nome}", color=theme.TEXTO_SUAVE, size=13),
+                        ft.Text(f"Caixa: {estado.caixa_nome} · v{VERSAO_APP}", color=theme.TEXTO_SUAVE, size=13),
                         ft.TextButton(
                             "Configurações", icon=ft.icons.SETTINGS,
                             on_click=lambda e: ao_abrir_configuracao(),
