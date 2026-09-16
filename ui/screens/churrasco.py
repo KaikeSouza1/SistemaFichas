@@ -510,15 +510,19 @@ def tela(page: ft.Page, estado, ao_voltar) -> ft.Control:
 
         def confirmar_dinheiro(e=None):
             total = venda_atual["valor_unitario"]
+            # Valor recebido nao e mais obrigatorio (mesmo pedido/fix ja
+            # aplicado em venda.py) - campo vazio assume que recebeu
+            # certinho (sem troco), e Enter no campo confirma direto.
             try:
                 pago = _parse_moeda(campo_pago.value)
             except ValueError:
-                componentes.aviso(page, "Informe o valor recebido.", cor=theme.ERRO)
-                return
+                pago = total
             if pago < total:
                 componentes.aviso(page, "Valor recebido é menor que o total.", cor=theme.ERRO)
                 return
             _finalizar("DINHEIRO")
+
+        campo_pago.on_submit = confirmar_dinheiro
 
         painel_dinheiro.content = ft.Column(
             [campo_pago, caixa_troco, texto_aviso_pago,

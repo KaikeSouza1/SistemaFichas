@@ -933,7 +933,15 @@ def tela(page: ft.Page, estado, ao_fechar_caixa, ao_deslogar, ao_abrir_configura
                         theme.botao_secundario("Fechar caixa", icone=ft.icons.POINT_OF_SALE,
                                                 on_click=lambda e: _parar_polling_e_chamar(ao_fechar_caixa)()),
                     ],
-                    spacing=6,
+                    # Rede de seguranca (bug real, 2026-09): "Fechar caixa"
+                    # ficava fora da largura visivel em notebook (DPI/
+                    # resolucao especifica) e so um resize de verdade
+                    # corrigia. Nenhum item aqui usa expand=True, entao
+                    # wrap=True e seguro (ver memoria do projeto sobre
+                    # Row(wrap=True)+expand quebrar a tela) - se ainda assim
+                    # nao couber tudo numa linha, quebra pra 2a linha em vez
+                    # de cortar o botao fora da tela sem aviso nenhum.
+                    spacing=6, wrap=True,
                 ),
             ],
             alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
