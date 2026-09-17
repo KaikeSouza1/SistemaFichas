@@ -929,9 +929,17 @@ def tela(page: ft.Page, estado, ao_fechar_caixa, ao_deslogar, ao_abrir_configura
                                      max_lines=1, overflow=ft.TextOverflow.ELLIPSIS)
 
     # No PC (tela larga) os botoes de acao ficam todos visiveis, como sempre
-    # foi. So no celular (tela estreita) eles somem e entram num menu "..." -
-    # nao cabe uma fileira de 7 botoes de texto numa tela de celular.
-    LARGURA_QUEBRA = 760
+    # foi. Em telas menores eles somem e entram num menu "..." - nao cabe
+    # uma fileira de 9 botoes de texto (Sangria...Trocar operador) + "Fechar
+    # caixa" numa tela pequena/notebook. O limiar de 760px foi definido
+    # quando essa fileira tinha bem menos botoes - com "Gerencial" e
+    # "Relatorio gerencial" adicionados depois, 760px ja nao e largura o
+    # suficiente pra caber tudo (bug real relatado, 2026-09-17: "Fechar
+    # caixa" ficava sem espaco e desaparecia numa tela pequena, mesmo com o
+    # wrap=True). Subido bem pra so usar o modo "completo" em monitor de
+    # verdade largo - o modo compacto (icone "..." + Fechar caixa, bem mais
+    # estreito) sobra espaco de verdade em qualquer tela menor que isso.
+    LARGURA_QUEBRA = 1500
 
     menu_acoes = ft.PopupMenuButton(
         icon=ft.icons.MORE_VERT,
