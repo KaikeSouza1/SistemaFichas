@@ -306,10 +306,25 @@ def tela(page: ft.Page, estado, ao_fechar_caixa, ao_deslogar, ao_abrir_configura
 
     # ---------- Finalizar venda ----------
 
+    _pagamento_aberto = {"valor": False}
+
     def abrir_dialogo_pagamento(e):
         if not estado.carrinho:
             componentes.aviso(page, "Carrinho vazio.", cor=theme.ALERTA)
             return
+        # Bug real relatado (2026-09-16/17): clicar "Finalizar venda" cria um
+        # ft.AlertDialog NOVO a cada chamada - se o clique disparar 2x (ex:
+        # duplo clique, ou um primeiro clique que pareceu "nao fazer nada"
+        # levando o operador a clicar de novo), o SEGUNDO dialogo substitui
+        # page.dialog enquanto o PRIMEIRO ainda esta logicamente aberto -
+        # exatamente a mesma classe de bug ja documentada no projeto (ver
+        # memoria "feedback_flet_dialog_race"): os botoes do dialogo que o
+        # operador ve na tela (o antigo) ficam "mortos" (fechar_dialogo/
+        # finalizar acabam agindo sobre o dialogo ERRADO). Trava aqui pra
+        # nunca abrir um segundo dialogo de pagamento por cima de outro.
+        if _pagamento_aberto["valor"]:
+            return
+        _pagamento_aberto["valor"] = True
 
         total = Decimal(str(estado.total_carrinho()))
 
@@ -372,7 +387,7 @@ def tela(page: ft.Page, estado, ao_fechar_caixa, ao_deslogar, ao_abrir_configura
             if pago < total:
                 componentes.aviso(page, "Valor recebido é menor que o total.", cor=theme.ERRO)
                 return
-            componentes.fechar_dialogo(page, dlg)
+            _fechar_pagamento()
             finalizar([{"forma": "DINHEIRO", "valor": total}])
 
         campo_pago_rapido.on_submit = confirmar_dinheiro_rapido
@@ -399,7 +414,7 @@ def tela(page: ft.Page, estado, ao_fechar_caixa, ao_deslogar, ao_abrir_configura
                     painel_dinheiro_rapido.visible = True
                     dlg.update()
                 else:
-                    componentes.fechar_dialogo(page, dlg)
+                    _fechar_pagamento()
                     finalizar([{"forma": codigo, "valor": total}])
             return handler
 
@@ -493,7 +508,7 @@ def tela(page: ft.Page, estado, ao_fechar_caixa, ao_deslogar, ao_abrir_configura
                 if pago < valor_dinheiro:
                     componentes.aviso(page, "Informe um valor recebido em dinheiro válido.", cor=theme.ERRO)
                     return
-            componentes.fechar_dialogo(page, dlg)
+            _fechar_pagamento()
             finalizar(pagamentos_form)
 
         campo_pago_dividido.on_submit = confirmar_dividido
@@ -520,6 +535,10 @@ def tela(page: ft.Page, estado, ao_fechar_caixa, ao_deslogar, ao_abrir_configura
             ),
         )
 
+        def _fechar_pagamento(e=None):
+            componentes.fechar_dialogo(page, dlg)
+            _pagamento_aberto["valor"] = False
+
         dlg = ft.AlertDialog(
             modal=True, bgcolor=theme.SURFACE,
             title=ft.Text(f"Total: {_fmt(total)}", color=theme.TEXTO, size=20),
@@ -527,7 +546,7 @@ def tela(page: ft.Page, estado, ao_fechar_caixa, ao_deslogar, ao_abrir_configura
                 [modo_rapido, painel_dinheiro_rapido, painel_dividido],
                 tight=True, spacing=10, scroll=ft.ScrollMode.AUTO, width=320, height=520,
             ),
-            actions=[ft.TextButton("Cancelar", on_click=lambda e: componentes.fechar_dialogo(page, dlg))],
+            actions=[ft.TextButton("Cancelar", on_click=_fechar_pagamento)],
         )
         page.dialog = dlg
         dlg.open = True
