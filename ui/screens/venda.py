@@ -598,7 +598,25 @@ def tela(page: ft.Page, estado, ao_fechar_caixa, ao_deslogar, ao_abrir_configura
 
         qtd_pedidos_caixa["valor"] += 1
         texto_qtd_pedidos.value = f"{qtd_pedidos_caixa['valor']} pedido(s) feito(s) neste caixa"
-        texto_qtd_pedidos.update()
+        # CAUSA REAL do bug relatado (achado rodando o app de verdade, nao so
+        # simulado, 2026-09-17): esse .update() sem guarda podia estourar
+        # "Text Control must be added to the page first" (mesma classe de
+        # bug ja documentada no projeto - ver memoria "Control.page e None
+        # até o Flet montar de verdade"). Como essa linha fica ANTES do
+        # try/except da impressao e SEM nenhum try/except proprio, a
+        # excecao matava o resto da funcao inteira - a venda JA TINHA sido
+        # registrada no banco (linha acima), mas o carrinho nunca esvaziava
+        # e a ficha nunca imprimia, sem nenhum erro visivel nem log (essa
+        # excecao acontecia ANTES dos pontos que ja tinham _logar_erro).
+        # Confirmado ao vivo: rodando o app real (nao so o teste automatizado
+        # que chama on_click direto) e clicando Pix, a venda apareceu no
+        # banco (repository.vendas_por_caixa) mas a tela nunca atualizou -
+        # exatamente "fica no carrinho, nao vai pra frente".
+        try:
+            if texto_qtd_pedidos.page:
+                texto_qtd_pedidos.update()
+        except Exception as ex:
+            _logar_erro("finalizar venda - texto_qtd_pedidos.update", ex)
 
         try:
             itens_impressao = repository.expandir_itens_para_impressao(itens)
