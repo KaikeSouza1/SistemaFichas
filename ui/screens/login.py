@@ -166,6 +166,7 @@ def tela(page: ft.Page, estado, ao_autenticar, ao_tentar_de_novo, ao_abrir_confi
     banner_atualizacao.border = ft.border.all(1, theme.SUCESSO)
 
     def _verificar_atualizacao_uma_vez():
+        atualizacao.sincronizar_central_config()
         versao_nova = atualizacao.verificar_nova_versao()
         if versao_nova:
             texto_atualizacao.value = f"Nova versão disponível ({versao_nova})."

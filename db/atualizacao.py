@@ -6,6 +6,7 @@ dev nao faz sentido se auto-atualizar). Nao depende de git/commit nenhum -
 so le o release ja existente via API publica (sem token, o repo e publico).
 """
 
+import base64
 import json
 import os
 import re
@@ -15,12 +16,15 @@ import sys
 import tempfile
 import urllib.error
 import urllib.request
+from pathlib import Path
 
 import certifi
 
+from config.central_fetch import FETCH_CONFIG
 from config.versao import URL_INSTALADOR, URL_RELEASE_API, VERSAO_APP
 
 _CONTEXTO_SSL = ssl.create_default_context(cafile=certifi.where())
+_PASTA_APP = Path(sys.executable).parent if getattr(sys, "frozen", False) else Path(__file__).resolve().parent.parent
 
 
 def verificar_nova_versao(timeout=6) -> str | None:
@@ -40,6 +44,37 @@ def verificar_nova_versao(timeout=6) -> str | None:
         return None
     versao_remota = m.group(1)
     return versao_remota if versao_remota != VERSAO_APP else None
+
+
+def sincronizar_central_config(timeout=8) -> bool:
+    """Busca a config do servidor central (config/central.local.json) num
+    repo GitHub SEPARADO, privado, que so tem esse arquivo (sem codigo-fonte)
+    - permite trocar o central (host/porta/senha) sem publicar build nova.
+
+    So faz efeito na PROXIMA vez que o app abrir (config/central.py le o
+    arquivo uma vez, no import) - roda aqui, junto da checagem de versao no
+    login, porque e o mesmo momento natural de "puxar atualizacao". Sem
+    FETCH_CONFIG (dev, ou instalacao antiga sem o arquivo) nao faz nada."""
+    if FETCH_CONFIG is None:
+        return False
+    try:
+        url = f"https://api.github.com/repos/{FETCH_CONFIG['repo']}/contents/central.local.json"
+        req = urllib.request.Request(url, headers={
+            "Accept": "application/vnd.github+json",
+            "Authorization": f"Bearer {FETCH_CONFIG['token']}",
+        })
+        with urllib.request.urlopen(req, timeout=timeout, context=_CONTEXTO_SSL) as resp:
+            dados = json.loads(resp.read().decode("utf-8"))
+        conteudo = base64.b64decode(dados["content"]).decode("utf-8")
+        config_nova = json.loads(conteudo)  # valida que e JSON antes de gravar
+    except (urllib.error.URLError, TimeoutError, json.JSONDecodeError, OSError, KeyError, ValueError):
+        return False
+
+    destino = _PASTA_APP / "config" / "central.local.json"
+    destino.parent.mkdir(parents=True, exist_ok=True)
+    with open(destino, "w", encoding="utf-8") as f:
+        json.dump(config_nova, f, indent=2)
+    return True
 
 
 def baixar_instalador(destino: str, timeout=120) -> None:

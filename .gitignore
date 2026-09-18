@@ -8,6 +8,7 @@ _app_window*.png
 _screenshot*.png
 config.default.json
 config/central.local.json
+config/central_fetch.local.json
 tools/postgres/
 tools/dados_evento/
 tools/postgres.log
