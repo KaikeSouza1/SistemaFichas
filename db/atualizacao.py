@@ -12,19 +12,17 @@ import os
 import re
 import ssl
 import subprocess
-import sys
 import tempfile
 import urllib.error
 import urllib.request
-from pathlib import Path
 
 import certifi
 
 from config.central_fetch import FETCH_CONFIG
+from config.settings import PASTA_DADOS_LOCAIS
 from config.versao import URL_INSTALADOR, URL_RELEASE_API, VERSAO_APP
 
 _CONTEXTO_SSL = ssl.create_default_context(cafile=certifi.where())
-_PASTA_APP = Path(sys.executable).parent if getattr(sys, "frozen", False) else Path(__file__).resolve().parent.parent
 
 
 def verificar_nova_versao(timeout=6) -> str | None:
@@ -51,6 +49,16 @@ def sincronizar_central_config(timeout=8) -> bool:
     repo GitHub SEPARADO, privado, que so tem esse arquivo (sem codigo-fonte)
     - permite trocar o central (host/porta/senha) sem publicar build nova.
 
+    Grava em PASTA_DADOS_LOCAIS (%LOCALAPPDATA%), NUNCA dentro da pasta de
+    instalacao (config/central.py agora tambem olha aqui, como PRIMEIRO
+    candidato) - bug real, 2026-09-21: a versao anterior tentava escrever
+    direto em "C:\\Program Files\\ADK Fichas\\config\\", sem try/except
+    NENHUM ao redor da escrita. Um usuario comum (sem admin) nao tem
+    permissao de escrita ali - o PermissionError matava a thread inteira
+    ANTES de verificar_nova_versao() rodar, deixando a checagem de
+    atualizacao inteira muda, sem nenhum erro visivel. Mesma licao ja
+    documentada em postgres_local.py pro mesmo motivo.
+
     So faz efeito na PROXIMA vez que o app abrir (config/central.py le o
     arquivo uma vez, no import) - roda aqui, junto da checagem de versao no
     login, porque e o mesmo momento natural de "puxar atualizacao". Sem
@@ -67,14 +75,17 @@ def sincronizar_central_config(timeout=8) -> bool:
             dados = json.loads(resp.read().decode("utf-8"))
         conteudo = base64.b64decode(dados["content"]).decode("utf-8")
         config_nova = json.loads(conteudo)  # valida que e JSON antes de gravar
-    except (urllib.error.URLError, TimeoutError, json.JSONDecodeError, OSError, KeyError, ValueError):
-        return False
 
-    destino = _PASTA_APP / "config" / "central.local.json"
-    destino.parent.mkdir(parents=True, exist_ok=True)
-    with open(destino, "w", encoding="utf-8") as f:
-        json.dump(config_nova, f, indent=2)
-    return True
+        destino = PASTA_DADOS_LOCAIS / "central.local.json"
+        destino.parent.mkdir(parents=True, exist_ok=True)
+        with open(destino, "w", encoding="utf-8") as f:
+            json.dump(config_nova, f, indent=2)
+        return True
+    except Exception:
+        # Nunca deixa isso derrubar a checagem de atualizacao (que roda
+        # logo depois, na MESMA thread) - exatamente o bug que este
+        # try/except mais abrangente existe pra evitar de novo.
+        return False
 
 
 def baixar_instalador(destino: str, timeout=120) -> None:
