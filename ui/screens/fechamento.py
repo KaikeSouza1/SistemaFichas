@@ -112,17 +112,21 @@ def tela(page: ft.Page, estado, ao_concluir, ao_tentar_de_novo, ao_voltar=None, 
         dlg_erro.open = True
         page.update()
 
-    def efetivar_fechamento():
+    def _calcular_estoque_impressao():
         # Qtd vendida por produto NESTA sessao, pra juntar com o estoque
-        # atual na tabela impressa (so no fechamento normal, pedido real do
-        # usuario) - casa por nome, igual "itens_vendidos" ja identifica.
+        # atual na tabela impressa - agora tanto no fechamento normal quanto
+        # no gerencial (pedido real do usuario, 2026-09-21: primeiro so
+        # queria no normal, depois pediu nos 2) - casa por nome, igual
+        # "itens_vendidos" ja identifica.
         qtd_vendida_por_nome = {}
         for item in resumo["itens_vendidos"]:
             qtd_vendida_por_nome[item["nome_produto"]] = qtd_vendida_por_nome.get(item["nome_produto"], 0) + item["quantidade"]
-        estoque_impressao = [
+        return [
             {**p, "quantidade_vendida": qtd_vendida_por_nome.get(p["nome"], 0)}
             for p in produtos_estoque
         ]
+
+    def efetivar_fechamento():
         try:
             dados = templates.fechamento_caixa_bytes(
                 nome_evento=evento["nome"],
@@ -131,7 +135,7 @@ def tela(page: ft.Page, estado, ao_concluir, ao_tentar_de_novo, ao_voltar=None, 
                 data_hora=datetime.now().strftime("%d/%m/%Y %H:%M:%S"),
                 resumo=resumo,
                 rodape=evento["rodape"],
-                estoque=estoque_impressao,
+                estoque=_calcular_estoque_impressao(),
             )
             for _ in range(_vias()):
                 escpos_printer.imprimir(cfg_local["impressora_windows"], dados)
@@ -150,6 +154,7 @@ def tela(page: ft.Page, estado, ao_concluir, ao_tentar_de_novo, ao_voltar=None, 
                 data_hora=datetime.now().strftime("%d/%m/%Y %H:%M:%S"),
                 resumo=resumo,
                 rodape=evento["rodape"],
+                estoque=_calcular_estoque_impressao(),
             )
             for _ in range(_vias()):
                 escpos_printer.imprimir(cfg_local["impressora_windows"], dados)
