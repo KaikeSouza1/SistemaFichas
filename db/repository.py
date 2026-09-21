@@ -1556,7 +1556,7 @@ def listar_fichas_churrasco_relatorio(evento_id):
     escolher/filtrar carne nenhuma. Ordenado por numero da ficha."""
     with conectar() as conn, conn.cursor() as cur:
         cur.execute(
-            """SELECT f.numero_ficha, f.nome_carne, f.valor
+            """SELECT f.numero_ficha, f.nome_carne, f.nome_cliente, f.valor
                FROM fichas_churrasco f
                JOIN sessoes_caixa s ON s.id = f.sessao_caixa_id
                WHERE f.status = 'EMITIDA' AND f.pago AND (%s::int IS NULL OR s.evento_id = %s)

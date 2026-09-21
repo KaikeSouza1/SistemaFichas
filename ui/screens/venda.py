@@ -413,6 +413,19 @@ def tela(page: ft.Page, estado, ao_fechar_caixa, ao_deslogar, ao_abrir_configura
                     modo_rapido.visible = False
                     painel_dinheiro_rapido.visible = True
                     dlg.update()
+                    # Pedido do usuario (2026-09-21): ja deixar o cursor
+                    # pronto pra digitar o valor recebido, sem precisar
+                    # clicar no campo - so funciona depois do update() acima
+                    # (o campo so existe "de verdade" pro Flet montar o foco
+                    # depois que a troca de painel (visible=True) ja foi
+                    # renderizada). Guardado com try/except pela mesma razao
+                    # ja documentada no projeto (Control.page fica None ate
+                    # o Flet montar de verdade) - nunca deve travar a troca
+                    # de forma de pagamento se o foco em si falhar.
+                    try:
+                        campo_pago_rapido.focus()
+                    except Exception:
+                        pass
                 else:
                     _fechar_pagamento()
                     finalizar([{"forma": codigo, "valor": total}])
@@ -423,12 +436,15 @@ def tela(page: ft.Page, estado, ao_fechar_caixa, ao_deslogar, ao_abrir_configura
             painel_dividido.visible = True
             dlg.update()
 
+        # Botoes maiores (pedido do usuario, 2026-09-21): sao os primeiros
+        # que o operador toca em toda venda, num monitor as vezes tocado a
+        # dedo - largura/altura maior que o botao_primario padrao (280x52).
         modo_rapido = ft.Column(
-            [theme.botao_primario(nome, on_click=escolher_rapido(codigo, nome), largura=280)
+            [theme.botao_primario(nome, on_click=escolher_rapido(codigo, nome), largura=320, altura=64)
              for codigo, nome in FORMAS_PAGAMENTO]
             + [ft.Divider(color=theme.BORDA),
-               theme.botao_secundario("Várias formas", icone=ft.icons.CALL_SPLIT, on_click=abrir_modo_dividido, largura=280)],
-            spacing=8,
+               theme.botao_secundario("Várias formas", icone=ft.icons.CALL_SPLIT, on_click=abrir_modo_dividido, largura=320, altura=56)],
+            spacing=10,
         )
 
         # ---------- Modo dividido (várias formas na mesma venda) ----------
@@ -855,7 +871,7 @@ def tela(page: ft.Page, estado, ao_fechar_caixa, ao_deslogar, ao_abrir_configura
                 produto_entrada = produtos_por_id[int(dropdown_entrada.value)]
                 qtd_entrada = ler_qtd(campo_qtd_entrada)
             try:
-                repository.registrar_troca(
+                troca_id = repository.registrar_troca(
                     estado.sessao_id, estado.caixa_id, estado.operador_id,
                     produto_saida, qtd_saida, produto_entrada, qtd_entrada, campo_motivo.value or None,
                 )
@@ -863,6 +879,39 @@ def tela(page: ft.Page, estado, ao_fechar_caixa, ao_deslogar, ao_abrir_configura
                 componentes.dialogo_erro_conexao(page, tentar_de_novo=None)
                 return
             componentes.fechar_dialogo(page, dlg)
+
+            # Ate aqui a troca so registrava no banco - nunca imprimia a
+            # ficha do produto novo recebido pelo cliente (bug real
+            # relatado, 2026-09-21: "nao emite ficha da troca"). Reusa
+            # expandir_itens_para_impressao (mesma logica de combo/
+            # emitir_ficha/ocultar_valor da venda normal) pro produto de
+            # entrada, se tiver um.
+            if produto_entrada is not None:
+                try:
+                    itens_impressao = repository.expandir_itens_para_impressao([{
+                        "produto_id": produto_entrada["id"], "nome": produto_entrada["nome"],
+                        "preco": produto_entrada["preco"], "quantidade": qtd_entrada,
+                    }])
+                    if itens_impressao:
+                        dados = templates.fichas_venda_bytes(
+                            nome_evento=evento["nome"],
+                            numero_pedido=troca_id,
+                            data_hora=datetime.now().strftime("%d/%m/%Y %H:%M:%S"),
+                            itens=itens_impressao,
+                            operador_nome=estado.operador_nome,
+                            caixa_nome=estado.caixa_nome,
+                            largura_pontos=LARGURA_PONTOS_CELULAR if page.web else templates.LARGURA_PONTOS,
+                            cortador_automatico=not page.web,
+                        )
+                        if page.web:
+                            _imprimir_via_rawbt(dados)
+                        else:
+                            escpos_printer.imprimir(cfg_local["impressora_windows"], dados)
+                except Exception as ex:
+                    _logar_erro("troca - impressao", ex)
+                    componentes.aviso(page, f"Troca registrada, mas a impressão falhou: {ex}.", cor=theme.ALERTA)
+                    return
+
             componentes.aviso(page, "Troca registrada.")
 
         dlg = ft.AlertDialog(

@@ -378,7 +378,14 @@ def fechamento_caixa_bytes(
     data_hora: str,
     resumo: dict,
     rodape: str = "",
+    estoque: list[dict] | None = None,
 ) -> bytes:
+    """`estoque` (opcional, pedido real do usuario 2026-09-21): produtos com
+    estoque_controlado=TRUE, cada um com "quantidade_vendida" ja calculada
+    (vendas desta sessao) - imprime uma tabela extra (Produto/Estoque
+    restante/Qtd vendida/Valor unitario/Valor total) so quando informado -
+    o relatorio gerencial (caixa aberto) NAO manda esse parametro de
+    proposito (decisao do usuario: essa tabela e so do fechamento de verdade)."""
     p = Dummy()
     p.hw("INIT")
 
@@ -423,6 +430,20 @@ def fechamento_caixa_bytes(
     _linha(p, _duas_colunas(f"TOTAL GERAL: {resumo['total_geral_qtd']}", _moeda(resumo["total_geral_valor"])))
     p.set(bold=False)
     _linha(p)
+
+    if estoque:
+        p.set(align="center", bold=True)
+        _linha(p, "ESTOQUE (PRODUTOS COM CONTROLE)")
+        p.set(align="left", bold=False)
+        _linha(p, "PRODUTO      EST VEND UNIT.  TOTAL")
+        for produto in estoque:
+            nome = f"{produto['nome']:<12}"[:12]
+            est = f"{produto['estoque_atual']:>3}"
+            vend = f"{produto['quantidade_vendida']:>4}"
+            unit = f"{_moeda(produto['preco']):>6}"
+            total = f"{_moeda(Decimal(str(produto['preco'])) * produto['quantidade_vendida']):>8}"
+            _linha(p, f"{nome} {est} {vend} {unit} {total}")
+        _linha(p)
 
     if rodape:
         _linha(p)
@@ -484,15 +505,16 @@ def relatorio_churrasco_bytes(nome_evento: str, fichas: list[dict], por_churrasq
     _linha(p, _separador())
 
     p.set(align="left", bold=True)
-    _linha(p, "Nº   CARNE                    VALOR")
+    _linha(p, "Nº   NOME         CARNE          VALOR")
     p.set(bold=False)
     total_qtd = 0
     total_valor = Decimal("0")
     for f in fichas:
         numero = f"{f['numero_ficha']:<4}"[:4]
-        carne = f"{str(f['nome_carne']):<20}"[:20]
-        valor = f"{_moeda(f['valor']):>10}"
-        _linha(p, f"{numero} {carne} {valor}")
+        nome_cliente = f"{str(f['nome_cliente']):<12}"[:12]
+        carne = f"{str(f['nome_carne']):<14}"[:14]
+        valor = f"{_moeda(f['valor']):>9}"
+        _linha(p, f"{numero} {nome_cliente} {carne} {valor}")
         total_qtd += 1
         total_valor += Decimal(str(f["valor"]))
 

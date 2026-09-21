@@ -170,7 +170,8 @@ def _cartao_churrasco(page, nome_evento, fichas, por_cor):
         ft.Row(
             [
                 ft.Text(f"Nº {f['numero_ficha']}", color=theme.TEXTO_SUAVE, size=12, width=55),
-                ft.Text(str(f["nome_carne"]), color=theme.TEXTO, size=13, expand=True, overflow=ft.TextOverflow.ELLIPSIS),
+                ft.Text(str(f["nome_cliente"]), color=theme.TEXTO, size=13, expand=True, overflow=ft.TextOverflow.ELLIPSIS),
+                ft.Text(str(f["nome_carne"]), color=theme.TEXTO_SUAVE, size=12, expand=True, overflow=ft.TextOverflow.ELLIPSIS),
                 ft.Text(_fmt(f["valor"]), color=theme.BRASA_CLARA, size=13, width=90, text_align=ft.TextAlign.RIGHT),
             ],
         )

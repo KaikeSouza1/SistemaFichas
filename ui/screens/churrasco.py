@@ -115,6 +115,29 @@ def tela(page: ft.Page, estado, ao_voltar) -> ft.Control:
         dados_b64 = base64.b64encode(dados).decode("ascii")
         page.launch_url(f"rawbt:base64,{dados_b64}")
 
+    def imprimir_relatorio_churrasco(gerencial: bool):
+        """Atalho direto na propria tela do churrasco (pedido real do
+        usuario, 2026-09-21) pro relatorio final (Nº ficha/nome/carne/valor +
+        por churrasqueira) - MESMO relatorio que ja existia em Relatorios,
+        so sem precisar navegar ate la. "Gerencial" e so um rotulo (o
+        relatorio nunca fecha nada, fichas de churrasco nao dependem de
+        sessao de caixa aberta/fechada) - existe pra deixar claro que pode
+        imprimir a qualquer momento durante o evento, nao so no final."""
+        try:
+            fichas = repository.listar_fichas_churrasco_relatorio(evento["id"])
+            por_cor = repository.resumo_churrasco_por_cor(evento["id"])
+            nome = f"{evento['nome']} (GERENCIAL - EM ANDAMENTO)" if gerencial else evento["nome"]
+            dados = templates.relatorio_churrasco_bytes(nome, fichas, por_cor)
+            if page.web:
+                _imprimir_via_rawbt(dados)
+            else:
+                escpos_printer.imprimir(cfg_local["impressora_windows"], dados)
+            componentes.aviso(page, "Relatório do churrasco enviado para a impressora.")
+        except ConexaoIndisponivel:
+            componentes.dialogo_erro_conexao(page, tentar_de_novo=None)
+        except Exception as ex:
+            componentes.aviso(page, f"Não deu para imprimir: {ex}", cor=theme.ALERTA)
+
     # ---------- Painel de totais por churrasqueira (tempo real) ----------
 
     painel_totais = ft.Row(spacing=10, wrap=True)
@@ -993,8 +1016,12 @@ def tela(page: ft.Page, estado, ao_voltar) -> ft.Control:
                     [
                         theme.botao_secundario("Faixas de numeração", icone=ft.icons.PALETTE, on_click=abrir_configuracao_faixas),
                         theme.botao_secundario("Buscar fichas", icone=ft.icons.SEARCH, on_click=abrir_busca_fichas),
+                        theme.botao_secundario("Relatório", icone=ft.icons.RECEIPT_LONG,
+                                                on_click=lambda e: imprimir_relatorio_churrasco(gerencial=False)),
+                        theme.botao_secundario("Relatório gerencial", icone=ft.icons.INSIGHTS,
+                                                on_click=lambda e: imprimir_relatorio_churrasco(gerencial=True)),
                     ],
-                    spacing=8,
+                    spacing=8, wrap=True,
                 ),
             ],
             alignment=ft.MainAxisAlignment.SPACE_BETWEEN,

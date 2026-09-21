@@ -18,8 +18,11 @@ def tela(page: ft.Page, estado, ao_concluir, ao_tentar_de_novo, ao_voltar=None, 
     try:
         resumo = repository.resumo_sessao(estado.sessao_id)
         evento = repository.obter_evento_aberto()
-        produtos_estoque = [p for p in repository.listar_produtos(somente_ativos=True) if p["estoque_controlado"]] \
-            if somente_consulta else []
+        # Usado no cartao "Estoque atual" (so no gerencial) E na tabela de
+        # estoque do relatorio IMPRESSO de fechamento normal (pedido real do
+        # usuario, 2026-09-21: ver quanto sobrou de cada produto com estoque
+        # controlado, junto com quanto vendeu desse produto nesta sessao).
+        produtos_estoque = [p for p in repository.listar_produtos(somente_ativos=True) if p["estoque_controlado"]]
     except ConexaoIndisponivel:
         return componentes.tela_estado_erro("Não deu para calcular o fechamento.", ao_tentar_de_novo)
 
@@ -110,6 +113,16 @@ def tela(page: ft.Page, estado, ao_concluir, ao_tentar_de_novo, ao_voltar=None, 
         page.update()
 
     def efetivar_fechamento():
+        # Qtd vendida por produto NESTA sessao, pra juntar com o estoque
+        # atual na tabela impressa (so no fechamento normal, pedido real do
+        # usuario) - casa por nome, igual "itens_vendidos" ja identifica.
+        qtd_vendida_por_nome = {}
+        for item in resumo["itens_vendidos"]:
+            qtd_vendida_por_nome[item["nome_produto"]] = qtd_vendida_por_nome.get(item["nome_produto"], 0) + item["quantidade"]
+        estoque_impressao = [
+            {**p, "quantidade_vendida": qtd_vendida_por_nome.get(p["nome"], 0)}
+            for p in produtos_estoque
+        ]
         try:
             dados = templates.fechamento_caixa_bytes(
                 nome_evento=evento["nome"],
@@ -118,6 +131,7 @@ def tela(page: ft.Page, estado, ao_concluir, ao_tentar_de_novo, ao_voltar=None, 
                 data_hora=datetime.now().strftime("%d/%m/%Y %H:%M:%S"),
                 resumo=resumo,
                 rodape=evento["rodape"],
+                estoque=estoque_impressao,
             )
             for _ in range(_vias()):
                 escpos_printer.imprimir(cfg_local["impressora_windows"], dados)
