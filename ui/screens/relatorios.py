@@ -5,6 +5,7 @@ from db import repository
 from db.connection import ConexaoIndisponivel
 from printing import escpos_printer, templates
 from ui import componentes, theme
+from ui.screens.churrasco import _rotulo_churrasqueira
 
 
 def tela(page: ft.Page, ao_voltar) -> ft.Control:
@@ -160,7 +161,13 @@ def _cartao_churrasco(page, nome_evento, fichas, por_cor):
     def imprimir(e):
         try:
             cfg_local = settings.load()
-            dados = templates.relatorio_churrasco_bytes(nome_evento, fichas, por_cor)
+            # Resolve o nome bonito da cor ANTES de imprimir (templates.py
+            # nao conhece CORES_PRESET de proposito) - senao o impresso
+            # mostra o cor_hex cru quando a churrasqueira nao tem nome
+            # livre digitado (bug real, 2026-09-21).
+            por_cor_resolvido = [{**linha, "nome_churrasqueira": _rotulo_churrasqueira(linha["nome_churrasqueira"], linha["cor_hex"])}
+                                  for linha in por_cor]
+            dados = templates.relatorio_churrasco_bytes(nome_evento, fichas, por_cor_resolvido)
             escpos_printer.imprimir(cfg_local["impressora_windows"], dados)
             componentes.aviso(page, "Relatório do churrasco enviado para a impressora.")
         except Exception as ex:

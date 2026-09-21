@@ -126,6 +126,13 @@ def tela(page: ft.Page, estado, ao_voltar) -> ft.Control:
         try:
             fichas = repository.listar_fichas_churrasco_relatorio(evento["id"])
             por_cor = repository.resumo_churrasco_por_cor(evento["id"])
+            # templates.py nao conhece CORES_PRESET (decoupled de proposito) -
+            # resolve o nome bonito da cor AQUI, igual a tela ja faz, senao o
+            # impresso mostra o cor_hex cru (ex: "#0000FF") quando a
+            # churrasqueira nao tem nome livre digitado (bug real relatado,
+            # 2026-09-21: "a cor ta saindo a decimal dela").
+            por_cor = [{**linha, "nome_churrasqueira": _rotulo_churrasqueira(linha["nome_churrasqueira"], linha["cor_hex"])}
+                       for linha in por_cor]
             nome = f"{evento['nome']} (GERENCIAL - EM ANDAMENTO)" if gerencial else evento["nome"]
             dados = templates.relatorio_churrasco_bytes(nome, fichas, por_cor)
             if page.web:
