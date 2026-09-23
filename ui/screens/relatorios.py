@@ -1,3 +1,5 @@
+from datetime import datetime
+
 import flet as ft
 
 from config import settings
@@ -19,7 +21,6 @@ def tela(page: ft.Page, ao_voltar) -> ft.Control:
     def carregar(evento_id, atualizar_pagina=True):
         try:
             mais_vendidos = repository.produtos_mais_vendidos(evento_id)
-            por_caixa = repository.vendas_por_caixa(evento_id)
             excluidos = repository.itens_excluidos_por_evento(evento_id)
             fichas_churrasco = repository.listar_fichas_churrasco_relatorio(evento_id)
             churrasco_por_cor = repository.resumo_churrasco_por_cor(evento_id)
@@ -32,18 +33,22 @@ def tela(page: ft.Page, ao_voltar) -> ft.Control:
         # "Vendas por operador" foi removido (pedido do usuario, 2026-09): com
         # 1 operador por caixa/sessao, esse relatorio sempre dava o MESMO
         # numero que "Vendas por caixa" - redundante.
-        nome_evento = "Todos os eventos"
-        if evento_id is not None:
-            achado = next((ev for ev in eventos if ev["id"] == evento_id), None)
-            nome_evento = achado["nome"] if achado else nome_evento
+        # "Vendas por caixa" (listagem separada por caixa) tambem foi tirado
+        # (pedido do usuario, 2026-09-23) - quando o evento roda em rede
+        # (todos os caixas no mesmo banco), o que o responsavel do evento
+        # quer e UM fechamento total somando tudo, nao um numero por caixa.
+        # So faz sentido pra 1 evento especifico (nao pra "Todos os eventos",
+        # que misturaria eventos diferentes num total so sem sentido).
+        evento_atual = next((ev for ev in eventos if ev["id"] == evento_id), None) if evento_id is not None else None
+        nome_evento = evento_atual["nome"] if evento_atual else "Todos os eventos"
 
         corpo.controls = [
             ft.Row(
                 [
                     _cartao_ranking(page, "Produtos mais vendidos", mais_vendidos, "nome_produto", "quantidade", "total"),
-                    _cartao_ranking(page, "Vendas por caixa", por_caixa, "nome", "qtd_vendas", "total"),
                     _cartao_ranking(page, "Itens excluídos do carrinho", excluidos, "nome_produto", "quantidade", "total"),
-                ],
+                ]
+                + ([_cartao_fechamento_total(page, evento_atual)] if evento_atual else []),
                 spacing=16, expand=True, vertical_alignment=ft.CrossAxisAlignment.START,
             ),
             ft.Row(
@@ -147,6 +152,77 @@ def _cartao_ranking(page, titulo, linhas, campo_nome, campo_qtd, campo_total):
         ),
         expand=1,
     )
+
+
+def _cartao_fechamento_total(page, evento):
+    """Fechamento somando TODOS os caixas/sessoes do evento (pedido real do
+    usuario, 2026-09-23) - MESMO formato/template do fechamento normal de 1
+    caixa, so que a fonte dos dados e resumo_evento (evento inteiro) em vez
+    de resumo_sessao (1 sessao). Substitui a antiga listagem "Vendas por
+    caixa" - so faz sentido quando os caixas do evento rodaram todos na
+    MESMA rede/banco; se rodaram cada um com seu proprio banco separado, o
+    responsavel ja pega um fechamento por PC na hora (fora daqui)."""
+    try:
+        resumo = repository.resumo_evento(evento["id"])
+    except ConexaoIndisponivel:
+        return theme.cartao(componentes.tela_estado_erro("Não deu para calcular o fechamento total.", lambda: None), expand=1)
+
+    def imprimir(e):
+        try:
+            cfg_local = settings.load()
+            dados = templates.fechamento_caixa_bytes(
+                nome_evento=evento["nome"],
+                caixa_nome="Todos os caixas",
+                operador_nome="-",
+                data_hora=_agora(),
+                resumo=resumo,
+                rodape=evento.get("rodape") or "",
+            )
+            escpos_printer.imprimir(cfg_local["impressora_windows"], dados)
+            componentes.aviso(page, "Fechamento total do evento enviado para a impressora.")
+        except Exception as ex:
+            componentes.aviso(page, f"Não deu para imprimir: {ex}", cor=theme.ALERTA)
+
+    def _linha(rotulo, valor, destaque=False):
+        return ft.Row(
+            [
+                ft.Text(rotulo, color=theme.TEXTO_SUAVE if not destaque else theme.TEXTO,
+                         size=13, weight=ft.FontWeight.W_700 if destaque else ft.FontWeight.NORMAL),
+                ft.Text(_fmt(valor), color=theme.TEXTO if not destaque else theme.BRASA_CLARA,
+                         size=13, weight=ft.FontWeight.W_700 if destaque else ft.FontWeight.NORMAL),
+            ],
+            alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
+        )
+
+    return theme.cartao(
+        ft.Column(
+            [
+                ft.Row(
+                    [
+                        ft.Text("Fechamento total do evento", color=theme.TEXTO, weight=ft.FontWeight.W_700, expand=True),
+                        ft.IconButton(ft.icons.PRINT, icon_color=theme.TEXTO_SUAVE, icon_size=18,
+                                      tooltip="Imprimir", on_click=imprimir),
+                    ],
+                    alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
+                ),
+                theme.subtitulo("Soma de todos os caixas deste evento (so faz sentido se rodaram na mesma rede).", tamanho=11),
+                ft.Divider(color=theme.BORDA),
+                _linha("Total em dinheiro", resumo["total_dinheiro"], destaque=True),
+                _linha("Cartão crédito", resumo["cartao_credito"]),
+                _linha("Cartão débito", resumo["cartao_debito"]),
+                _linha("Pix", resumo["pix"]),
+                _linha("Consumação", resumo["consumacao"]),
+                ft.Divider(color=theme.BORDA),
+                _linha(f"Total geral ({resumo['total_geral_qtd']} itens)", resumo["total_geral_valor"], destaque=True),
+            ],
+            spacing=8,
+        ),
+        expand=1,
+    )
+
+
+def _agora() -> str:
+    return datetime.now().strftime("%d/%m/%Y %H:%M:%S")
 
 
 def _cartao_churrasco(page, nome_evento, fichas, por_cor):

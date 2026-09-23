@@ -647,7 +647,7 @@ def obter_evento_aberto():
 def listar_eventos():
     with conectar() as conn, conn.cursor() as cur:
         cur.execute(
-            """SELECT id, nome, status, data_abertura, data_fechamento
+            """SELECT id, nome, rodape, status, data_abertura, data_fechamento
                FROM eventos ORDER BY data_abertura DESC"""
         )
         return cur.fetchall()
@@ -1067,6 +1067,135 @@ def resumo_sessao(sessao_id):
     return {
         "sessao": sessao,
         "abertura": sessao["valor_abertura"],
+        "adicional": adicional,
+        "sangria": sangria,
+        "dinheiro_vendas": dinheiro_vendas,
+        "total_dinheiro": total_dinheiro,
+        "cartao_credito": por_forma.get("CARTAO_CREDITO", Decimal("0")),
+        "cartao_debito": por_forma.get("CARTAO_DEBITO", Decimal("0")),
+        "pix": por_forma.get("PIX", Decimal("0")),
+        "consumacao": por_forma.get("CONSUMACAO", Decimal("0")),
+        "itens_vendidos": itens_vendidos,
+        "total_geral_qtd": sum(i["quantidade"] for i in itens_vendidos),
+        "total_geral_valor": sum(i["total"] for i in itens_vendidos),
+        "itens_excluidos_qtd": excluidos["qtd"],
+        "itens_excluidos_valor": excluidos["total"],
+        "custo_total": custo_total,
+        "lucro_total": sum(i["total"] for i in itens_vendidos) - custo_total,
+        "trocas_total": trocas_total,
+    }
+
+
+def resumo_evento(evento_id):
+    """Mesmo formato de resumo_sessao (mesmo dict, mesma impressao via
+    templates.fechamento_caixa_bytes), so que somando TODOS os caixas/
+    sessoes daquele evento - pedido real do usuario, 2026-09-23: quando o
+    evento inteiro roda em rede (todos os caixas no mesmo banco), o
+    fechamento pra entregar pro responsavel do evento deve ser UM total
+    so, nao um por caixa (isso so faz sentido quando os caixas rodaram
+    cada um com seu proprio banco separado, sem rede - nesse caso o
+    responsavel ja pega um fechamento por PC na hora, fora daqui)."""
+    with conectar() as conn, conn.cursor() as cur:
+        cur.execute(
+            """SELECT COALESCE(SUM(valor_abertura), 0) AS total FROM sessoes_caixa
+               WHERE evento_id=%s""",
+            (evento_id,),
+        )
+        abertura = cur.fetchone()["total"]
+
+        cur.execute(
+            """SELECT COALESCE(SUM(m.valor), 0) AS total FROM movimentos_caixa m
+               JOIN sessoes_caixa s ON s.id = m.sessao_caixa_id
+               WHERE s.evento_id=%s AND m.tipo='REFORCO'""",
+            (evento_id,),
+        )
+        adicional = cur.fetchone()["total"]
+
+        cur.execute(
+            """SELECT COALESCE(SUM(m.valor), 0) AS total FROM movimentos_caixa m
+               JOIN sessoes_caixa s ON s.id = m.sessao_caixa_id
+               WHERE s.evento_id=%s AND m.tipo='SANGRIA'""",
+            (evento_id,),
+        )
+        sangria = cur.fetchone()["total"]
+
+        cur.execute(
+            """SELECT pv.forma_pagamento, COALESCE(SUM(pv.valor), 0) AS total
+               FROM pagamentos_venda pv
+               JOIN vendas v ON v.id = pv.venda_id
+               JOIN sessoes_caixa s ON s.id = v.sessao_caixa_id
+               WHERE s.evento_id=%s AND v.status='CONCLUIDA'
+               GROUP BY pv.forma_pagamento""",
+            (evento_id,),
+        )
+        por_forma = {r["forma_pagamento"]: r["total"] for r in cur.fetchall()}
+
+        cur.execute(
+            """SELECT f.forma_pagamento, COALESCE(SUM(f.valor), 0) AS total
+               FROM fichas_churrasco f
+               WHERE f.evento_id=%s AND f.status='EMITIDA' AND f.pago
+               GROUP BY f.forma_pagamento""",
+            (evento_id,),
+        )
+        for r in cur.fetchall():
+            por_forma[r["forma_pagamento"]] = por_forma.get(r["forma_pagamento"], Decimal("0")) + r["total"]
+
+        cur.execute(
+            """SELECT iv.nome_produto, SUM(iv.quantidade) AS quantidade,
+                      iv.preco_unitario, SUM(iv.subtotal) AS total
+               FROM itens_venda iv
+               JOIN vendas v ON v.id = iv.venda_id
+               JOIN sessoes_caixa s ON s.id = v.sessao_caixa_id
+               WHERE s.evento_id = %s AND v.status = 'CONCLUIDA'
+               GROUP BY iv.nome_produto, iv.preco_unitario
+               ORDER BY iv.nome_produto""",
+            (evento_id,),
+        )
+        itens_vendidos = cur.fetchall()
+
+        cur.execute(
+            """SELECT f.nome_carne AS nome_produto, COUNT(*) AS quantidade,
+                      f.valor AS preco_unitario, SUM(f.valor) AS total
+               FROM fichas_churrasco f
+               WHERE f.evento_id = %s AND f.status = 'EMITIDA' AND f.pago
+               GROUP BY f.nome_carne, f.valor
+               ORDER BY f.nome_carne""",
+            (evento_id,),
+        )
+        itens_vendidos = itens_vendidos + cur.fetchall()
+
+        cur.execute(
+            """SELECT COALESCE(SUM(ie.quantidade), 0) AS qtd, COALESCE(SUM(ie.valor), 0) AS total
+               FROM itens_excluidos ie
+               JOIN sessoes_caixa s ON s.id = ie.sessao_caixa_id
+               WHERE s.evento_id = %s""",
+            (evento_id,),
+        )
+        excluidos = cur.fetchone()
+
+        cur.execute(
+            """SELECT COALESCE(SUM(iv.custo_unitario * iv.quantidade), 0) AS total
+               FROM itens_venda iv
+               JOIN vendas v ON v.id = iv.venda_id
+               JOIN sessoes_caixa s ON s.id = v.sessao_caixa_id
+               WHERE s.evento_id = %s AND v.status = 'CONCLUIDA'""",
+            (evento_id,),
+        )
+        custo_total = cur.fetchone()["total"]
+
+        cur.execute(
+            """SELECT COALESCE(SUM(t.diferenca_valor), 0) AS total FROM trocas t
+               JOIN sessoes_caixa s ON s.id = t.sessao_caixa_id
+               WHERE s.evento_id = %s""",
+            (evento_id,),
+        )
+        trocas_total = cur.fetchone()["total"]
+
+    dinheiro_vendas = por_forma.get("DINHEIRO", Decimal("0"))
+    total_dinheiro = abertura + adicional + dinheiro_vendas - sangria + trocas_total
+
+    return {
+        "abertura": abertura,
         "adicional": adicional,
         "sangria": sangria,
         "dinheiro_vendas": dinheiro_vendas,
